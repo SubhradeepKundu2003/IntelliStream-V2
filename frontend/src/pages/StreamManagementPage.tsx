@@ -124,7 +124,7 @@ function SetWeightsModal({
     try {
       const weights: StreamSubjectWeight[] = subjects.map((s) => ({
         subject_name: s,
-        weight_pct: parseFloat(parseFloat(values[s] ?? '0').toFixed(2)),
+        weight_pct: parseFloat((parseFloat(values[s] || '0') || 0).toFixed(2)),
       }));
       if (isSme) {
         await streamsApi.submitProposal(stream.batch_name, stream.id, { weights });
