@@ -1,6 +1,5 @@
 from contextlib import asynccontextmanager
 
-from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text
@@ -13,7 +12,6 @@ from database import Base, SessionLocal, engine
 from models import Role, User
 from notifications.routes import router as notifications_router
 from sync.routes import router as sync_router
-from sync.service import run_sync
 from streams.routes import router as streams_router
 from stream_templates.routes import router as stream_templates_router
 from trainees.routes import trainee_router
@@ -120,18 +118,7 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
-    try:
-        await run_sync()
-    except Exception as exc:
-        print(f"[sync] Initial sync skipped (SpringBoot unavailable): {exc}")
-
-    scheduler = AsyncIOScheduler()
-    scheduler.add_job(run_sync, "cron", hour=0, minute=0, id="daily_springboot_sync")
-    scheduler.start()
-
     yield
-
-    scheduler.shutdown()
 
 
 app = FastAPI(

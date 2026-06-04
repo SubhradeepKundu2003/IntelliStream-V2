@@ -1,16 +1,13 @@
-import asyncio
 import io
 import json
 from datetime import datetime, timezone
 from typing import Optional
 
-import httpx
-from fastapi import APIRouter, BackgroundTasks, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from auth.dependencies import get_current_user, require_manager_or_above
-from config import settings
 from database import get_db
 from sync.models import SyncedBatch, SyncedDpiRecord, SyncedSubjectScore
 
@@ -100,47 +97,10 @@ def list_excel_batches(db: Session = Depends(get_db), _=Depends(get_current_user
     return [{"batch_name": r.batch_name, "uploaded_at": r.uploaded_at, "trainee_count": r.trainee_count} for r in rows]
 
 
-# ── Java background backup ────────────────────────────────────────────
-
-async def _backup_to_java(
-    batch_name: str,
-    dpi_payloads: list[dict],
-    score_payloads: list[dict],
-) -> None:
-    try:
-        async with httpx.AsyncClient() as client:
-            # Ensure batch exists
-            try:
-                r = await client.get(
-                    f"{settings.SPRINGBOOT_BASE_URL}/api/subjects/{batch_name}", timeout=5.0
-                )
-                if r.status_code == 404:
-                    await client.post(
-                        f"{settings.SPRINGBOOT_BASE_URL}/api/subjects",
-                        json={"batchName": batch_name, "traineeCount": len(dpi_payloads), "subjects": _EXCEL_SUBJECTS},
-                        timeout=5.0,
-                    )
-            except Exception:
-                pass
-
-            # Fire all DPI + score POSTs concurrently
-            tasks = [
-                client.post(f"{settings.SPRINGBOOT_BASE_URL}/api/dpi", json=p, timeout=10.0)
-                for p in dpi_payloads
-            ] + [
-                client.post(f"{settings.SPRINGBOOT_BASE_URL}/api/scores", json=p, timeout=10.0)
-                for p in score_payloads
-            ]
-            await asyncio.gather(*tasks, return_exceptions=True)
-    except Exception:
-        pass  # background backup — never raises
-
-
 # ── Upload ────────────────────────────────────────────────────────────
 
 @router.post("/upload-excel", response_model=ScoresUploadResult)
 async def upload_excel(
-    background_tasks: BackgroundTasks,
     batch_name: str = Form(...),
     file: UploadFile = File(...),
     db: Session = Depends(get_db),
@@ -162,10 +122,6 @@ async def upload_excel(
     succeeded = 0
     failed = 0
     now = datetime.now(timezone.utc).isoformat()
-
-    # Payloads collected for background Java backup (fired after response is sent)
-    java_dpi_payloads: list[dict] = []
-    java_score_payloads: list[dict] = []
 
     for row_idx, row in enumerate(ws.iter_rows(min_row=2, values_only=True), start=2):
             if not any(cell is not None for cell in row):
@@ -276,19 +232,6 @@ async def upload_excel(
                     synced_at=now,
                 ))
 
-            # ── Collect Java backup payloads (sent after response via background task) ──
-            java_dpi_payloads.append({
-                "traineeId": emp_id_str, "batchName": batch_name,
-                "traineeName": name_str, "dpi": dpi_float,
-                "location": None, "subBatch": sub_batch_str,
-            })
-            for subj_name, score_val in subject_scores:
-                java_score_payloads.append({
-                    "batchName": batch_name, "traineeId": emp_id_str,
-                    "traineeName": name_str, "subjectName": subj_name,
-                    "subjectId": None, "examName": "Excel Upload", "score": score_val,
-                })
-
             # ── Stream reference ──
             if stream_val:
                 stream_str = str(stream_val).strip()
@@ -347,9 +290,6 @@ async def upload_excel(
         ))
 
     db.commit()
-
-    # Schedule Java backup — runs after response is sent, all rows concurrently
-    background_tasks.add_task(_backup_to_java, batch_name, java_dpi_payloads, java_score_payloads)
 
     return ScoresUploadResult(
         rows_processed=succeeded + failed,

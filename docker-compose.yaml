@@ -62,19 +62,6 @@ services:
       timeout: 5s
 
 
-  backend:
-    build:
-      context: ./IntelliStreamDeco
-    container_name: intellistream-backend
-    depends_on:
-      - postgres
-    ports:
-      - "8090:8080"
-    environment:
-      SPRING_DATASOURCE_URL: jdbc:postgresql://intellistream-postgres:5432/intellistreamdb
-      SPRING_DATASOURCE_USERNAME: postgres
-      SPRING_DATASOURCE_PASSWORD: postgres
-
   fastapi:
     build:
       context: ./backend-fastapi

@@ -3,17 +3,14 @@ import json
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 
-from auth.dependencies import get_current_user, require_manager_or_above
+from auth.dependencies import get_current_user
 from database import get_db
-from .models import SyncedBatch, SyncedDpiRecord, SyncedSubjectScore, SyncStatus
+from .models import SyncedBatch, SyncedDpiRecord, SyncedSubjectScore
 from .schemas import (
     BatchResponse,
     DpiRecordResponse,
     SubjectScoreResponse,
-    SyncStatusResponse,
-    SyncTriggerResponse,
 )
-from .service import run_sync
 
 router = APIRouter(prefix="/sync", tags=["sync"])
 
@@ -71,19 +68,3 @@ def get_scores_by_trainee(trainee_id: str, db: Session = Depends(get_db), _=Depe
     return db.query(SyncedSubjectScore).filter(SyncedSubjectScore.trainee_id == trainee_id).all()
 
 
-@router.get("/status", response_model=SyncStatusResponse)
-def get_sync_status(db: Session = Depends(get_db), _=Depends(get_current_user)):
-    s = db.query(SyncStatus).filter(SyncStatus.source == "springboot").first()
-    if not s:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No sync has run yet")
-    return s
-
-
-@router.post("/trigger", response_model=SyncTriggerResponse)
-async def trigger_sync(
-    preserve_excel: bool = False,
-    _=Depends(require_manager_or_above),
-):
-    result = await run_sync(preserve_excel=preserve_excel)
-    msg = "Sync completed — Excel batches preserved" if preserve_excel else "Sync completed successfully"
-    return SyncTriggerResponse(message=msg, **result)

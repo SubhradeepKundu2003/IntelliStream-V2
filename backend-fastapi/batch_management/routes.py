@@ -1,9 +1,12 @@
-import httpx
+import json
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
+from sqlalchemy.orm import Session
 
 from auth.dependencies import get_current_user, require_manager_or_above
-from config import settings
+from database import get_db
+from sync.models import SyncedBatch
 
 router = APIRouter(prefix="/batch-management", tags=["batch-management"])
 
@@ -14,50 +17,59 @@ class BatchRequest(BaseModel):
     subjects: list[str]
 
 
-def _sb_url(path: str = "") -> str:
-    return f"{settings.SPRINGBOOT_BASE_URL}/api/subjects{path}"
-
-
-async def _proxy(method: str, url: str, **kwargs):
-    try:
-        async with httpx.AsyncClient() as client:
-            r = await client.request(method, url, **kwargs)
-        if r.status_code == 404:
-            raise HTTPException(status_code=404, detail="Batch not found")
-        r.raise_for_status()
-        return r
-    except HTTPException:
-        raise
-    except httpx.HTTPStatusError as e:
-        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
-    except httpx.RequestError:
-        raise HTTPException(status_code=503, detail="Spring Boot service unavailable")
+def _to_response(b: SyncedBatch) -> dict:
+    return {
+        "batchName": b.batch_name,
+        "traineeCount": b.trainee_count,
+        "subjects": json.loads(b.subjects_json),
+    }
 
 
 @router.get("", dependencies=[Depends(get_current_user)])
-async def list_batches():
-    r = await _proxy("GET", _sb_url())
-    return r.json()
+def list_batches(db: Session = Depends(get_db)):
+    return [_to_response(b) for b in db.query(SyncedBatch).all()]
 
 
 @router.post("", status_code=201, dependencies=[Depends(require_manager_or_above)])
-async def create_batch(body: BatchRequest):
-    r = await _proxy("POST", _sb_url(), json=body.model_dump())
-    return r.json()
+def create_batch(body: BatchRequest, db: Session = Depends(get_db)):
+    if db.query(SyncedBatch).filter(SyncedBatch.batch_name == body.batchName).first():
+        raise HTTPException(status_code=409, detail="Batch already exists")
+    batch = SyncedBatch(
+        batch_name=body.batchName,
+        trainee_count=body.traineeCount,
+        subjects_json=json.dumps(body.subjects),
+    )
+    db.add(batch)
+    db.commit()
+    db.refresh(batch)
+    return _to_response(batch)
 
 
 @router.get("/{batch_name}", dependencies=[Depends(get_current_user)])
-async def get_batch(batch_name: str):
-    r = await _proxy("GET", _sb_url(f"/{batch_name}"))
-    return r.json()
+def get_batch(batch_name: str, db: Session = Depends(get_db)):
+    b = db.query(SyncedBatch).filter(SyncedBatch.batch_name == batch_name).first()
+    if not b:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    return _to_response(b)
 
 
 @router.put("/{batch_name}", dependencies=[Depends(require_manager_or_above)])
-async def update_batch(batch_name: str, body: BatchRequest):
-    r = await _proxy("PUT", _sb_url(f"/{batch_name}"), json=body.model_dump())
-    return r.json()
+def update_batch(batch_name: str, body: BatchRequest, db: Session = Depends(get_db)):
+    b = db.query(SyncedBatch).filter(SyncedBatch.batch_name == batch_name).first()
+    if not b:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    b.batch_name = body.batchName
+    b.trainee_count = body.traineeCount
+    b.subjects_json = json.dumps(body.subjects)
+    db.commit()
+    db.refresh(b)
+    return _to_response(b)
 
 
 @router.delete("/{batch_name}", status_code=204, dependencies=[Depends(require_manager_or_above)])
-async def delete_batch(batch_name: str):
-    await _proxy("DELETE", _sb_url(f"/{batch_name}"))
+def delete_batch(batch_name: str, db: Session = Depends(get_db)):
+    b = db.query(SyncedBatch).filter(SyncedBatch.batch_name == batch_name).first()
+    if not b:
+        raise HTTPException(status_code=404, detail="Batch not found")
+    db.delete(b)
+    db.commit()

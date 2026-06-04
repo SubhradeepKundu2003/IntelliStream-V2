@@ -16,8 +16,6 @@ class Settings(BaseSettings):
     DEFAULT_ADMIN_EMAIL: str = "admin@example.com"
     DEFAULT_ADMIN_PASSWORD: str = "Tcs#1234"
 
-    SPRINGBOOT_BASE_URL: str = "http://backend:8080"
-
     DPI_WEIGHT: float = 0.40
     SCORE_WEIGHT: float = 0.60
 
