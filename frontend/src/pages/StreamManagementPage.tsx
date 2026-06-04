@@ -1137,7 +1137,7 @@ function SplitCapacityModal({
   const [totalTrainees, setTotalTrainees] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-  console.log("Total trainees:", totalTrainees, loadingCount);
+  // console.log("Total trainees:", totalTrainees, loadingCount);
   useEffect(() => {
     if (!isOpen) return;
 
@@ -1223,7 +1223,9 @@ function SplitCapacityModal({
         }
       });
 
-      const remaining = 100 - totalExceptNext - currentPct;
+      const remaining = inputMode === 'pct'
+        ? 100 - totalExceptNext - currentPct
+        : totalTrainees - totalExceptNext - currentPct;
 
       newValues[nextStream.id] = String(Math.max(0, remaining));
 
