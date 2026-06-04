@@ -1,7 +1,7 @@
 from contextlib import asynccontextmanager
 
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from fastapi import FastAPI
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from sqlalchemy import inspect, text
 from sqlalchemy.orm import Session
@@ -73,6 +73,16 @@ def _run_migrations() -> None:
 
     # excel_batch_registry is created automatically by SQLAlchemy via Base.metadata.create_all
     # sme_associate_requests is created automatically by SQLAlchemy via Base.metadata.create_all
+    # swap_records is created automatically by SQLAlchemy via Base.metadata.create_all
+
+    if "swap_records" in inspector.get_table_names():
+        sr_cols = {c["name"] for c in inspector.get_columns("swap_records")}
+        if "is_cancelled" not in sr_cols:
+            with engine.begin() as conn:
+                conn.execute(text("ALTER TABLE swap_records ADD COLUMN is_cancelled BOOLEAN NOT NULL DEFAULT FALSE"))
+                conn.execute(text("ALTER TABLE swap_records ADD COLUMN cancelled_at TIMESTAMP WITH TIME ZONE"))
+                conn.execute(text("ALTER TABLE swap_records ADD COLUMN cancelled_by_email VARCHAR"))
+            print("[migration] Added cancellation columns to swap_records")
 
     # Add new notification enum values for PostgreSQL (SQLite stores as VARCHAR, no action needed)
     try:
@@ -130,6 +140,24 @@ app = FastAPI(
     description="JWT-based authentication with role-based access control",
     lifespan=lifespan,
 )
+
+connections: dict[str, list[WebSocket]] = {}
+
+
+@app.websocket("/ws/{user_id}")
+async def websocket_endpoint(websocket: WebSocket, user_id: str):
+    await websocket.accept()
+
+    if user_id not in connections:
+        connections[user_id] = []
+
+    connections[user_id].append(websocket)
+
+    try:
+        while True:
+            await websocket.receive_text()  # keep alive
+    except WebSocketDisconnect:
+        connections[user_id].remove(websocket)
 
 app.add_middleware(
     CORSMiddleware,

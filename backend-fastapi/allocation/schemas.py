@@ -71,6 +71,7 @@ class TraineeAllocationResponse(BaseModel):
 class ManualOverrideRequest(BaseModel):
     stream_id: int
     reason: str
+    outgoing_employee_id: Optional[str] = None
 
 
 class AllocationRunRequest(BaseModel):
@@ -108,6 +109,32 @@ class AllocationAIRecommendationResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SwapRecordResponse(BaseModel):
+    id: int
+    batch_name: str
+    incoming_employee_id: str
+    incoming_employee_name: str
+    incoming_from_stream_id: Optional[int]
+    incoming_from_stream_name: Optional[str]
+    outgoing_employee_id: str
+    outgoing_employee_name: str
+    outgoing_to_stream_id: Optional[int]
+    outgoing_to_stream_name: Optional[str]
+    target_stream_id: int
+    target_stream_name: Optional[str]
+    swap_source: str
+    sme_request_id: Optional[int]
+    incoming_score: Optional[float]
+    outgoing_score: Optional[float]
+    score_diff: Optional[float]
+    performed_by_email: str
+    created_at: datetime
+    is_cancelled: bool
+    cancelled_at: Optional[datetime]
+    cancelled_by_email: Optional[str]
+    model_config = {"from_attributes": True}
+
+
 class SMEAssociateRequestCreate(BaseModel):
     stream_id: int
     requested_employee_ids: list[str]
@@ -139,6 +166,27 @@ class SMEAssociateRequestResponse(BaseModel):
     model_config = {"from_attributes": True}
 
 
+class SwapCandidate(BaseModel):
+    employee_id: str
+    trainee_name: str
+    composite_score: float | None
+    score_diff: float | None
+
+
+class SwapSuggestion(BaseModel):
+    employee_id: str
+    trainee_name: str
+    composite_score: float | None
+    current_stream_name: str | None
+    candidates: list[SwapCandidate]
+
+
+class SwapPair(BaseModel):
+    incoming_employee_id: str
+    outgoing_employee_id: str
+
+
 class SMEAssociateRequestReview(BaseModel):
     approved_employee_ids: list[str]
     review_notes: Optional[str] = None
+    swaps: list[SwapPair] = []

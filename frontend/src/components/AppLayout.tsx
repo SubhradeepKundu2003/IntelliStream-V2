@@ -1,5 +1,5 @@
 import { NavLink, Outlet, useNavigate } from 'react-router-dom';
-import { BookOpen, Database, GitBranch, GraduationCap, Layers, LayoutDashboard, LogOut, UserCheck, Users } from 'lucide-react';
+import { BookOpen, Database, GitBranch, GraduationCap, Layers, LayoutDashboard, LogOut, UserCheck, UserPlus, Users } from 'lucide-react';
 import { useAuth } from '../contexts/AuthContext';
 import ThemeToggle from './ui/ThemeToggle';
 import Badge from './ui/Badge';
@@ -15,13 +15,14 @@ interface NavItem {
 
 const NAV_ITEMS: NavItem[] = [
   { label: 'Dashboard',        to: '/home',                  icon: <LayoutDashboard size={18} />, roles: ['admin', 'manager', 'sme'] },
+  { label: 'User Management',  to: '/admin/users',          icon: <Users size={18} />,           roles: ['admin'] },
+  { label: 'Training Data',    to: '/admin/training-data',         icon: <Database size={18} />,      roles: ['admin', 'manager'] },
   { label: 'Stream Management', to: '/streams',             icon: <GitBranch size={18} />,       roles: ['admin', 'manager', 'sme'] },
   { label: 'Trainee Allocation', to: '/allocation',         icon: <UserCheck size={18} />,       roles: ['admin', 'manager', 'sme'] },
-  { label: 'User Management',  to: '/admin/users',          icon: <Users size={18} />,           roles: ['admin'] },
-  { label: 'Stream Templates', to: '/admin/stream-templates',      icon: <Layers size={18} />,        roles: ['admin', 'manager', 'sme'] },
-  { label: 'Batch Management',   to: '/admin/trainees',           icon: <GraduationCap size={18} />, roles: ['admin', 'manager'] },
-  { label: 'Training Data',    to: '/admin/training-data',         icon: <Database size={18} />,      roles: ['admin', 'manager'] },
-  { label: 'Business Reqs',   to: '/admin/business-requirements', icon: <BookOpen size={18} />,      roles: ['admin', 'manager'] },
+  { label: 'SME Requests',      to: '/sme-requests',       icon: <UserPlus size={18} />,        roles: ['admin', 'manager', 'sme'] },
+  { label: 'Stream Templates', to: '/admin/stream-templates',      icon: <Layers size={18} />,        roles: ['admin', 'manager', 'sme'] }, // Remove in future
+  { label: 'Batch Management',   to: '/admin/trainees',           icon: <GraduationCap size={18} />, roles: ['admin', 'manager'] }, // Remove in future
+  { label: 'Business Reqs',   to: '/admin/business-requirements', icon: <BookOpen size={18} />,      roles: ['admin', 'manager'] }, // Implement for Greater cause
 ];
 
 export default function AppLayout() {

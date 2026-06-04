@@ -18,7 +18,7 @@ from notifications.service import create_notification
 from streams.models import BatchStream, BatchStreamSME
 
 from .ai_recommender import generate_allocation_recommendations
-from .models import AllocationAIRecommendation, AllocationConfig, RequestStatus, SMEAssociateRequest, TraineeAllocation
+from .models import AllocationAIRecommendation, AllocationConfig, RequestStatus, SMEAssociateRequest, SwapRecord, TraineeAllocation
 from .schemas import (
     AllocationAIRecommendationResponse,
     AllocationConfigResponse,
@@ -30,6 +30,9 @@ from .schemas import (
     SMEAssociateRequestResponse,
     SMEAssociateRequestReview,
     StreamScoreDetail,
+    SwapCandidate,
+    SwapRecordResponse,
+    SwapSuggestion,
     TraineeAllocationResponse,
 )
 from .service import get_or_create_config, run_allocation
@@ -42,6 +45,68 @@ def _stream_name(stream_id: int | None, db: Session) -> str | None:
         return None
     s = db.query(BatchStream).filter_by(id=stream_id).first()
     return s.name if s else None
+
+
+def _create_swap_record(
+    db: Session,
+    *,
+    batch_name: str,
+    incoming: TraineeAllocation,
+    outgoing: TraineeAllocation,
+    target_stream_id: int,
+    incoming_from_stream_id: int | None,
+    swap_source: str,
+    sme_request_id: int | None,
+    performed_by_email: str,
+) -> SwapRecord:
+    inc_score = incoming.composite_score
+    out_score = outgoing.composite_score
+    diff = round(abs((inc_score or 0.0) - (out_score or 0.0)), 2) if inc_score is not None and out_score is not None else None
+    record = SwapRecord(
+        batch_name=batch_name,
+        incoming_employee_id=incoming.employee_id,
+        incoming_employee_name=incoming.trainee_name,
+        incoming_from_stream_id=incoming_from_stream_id,
+        outgoing_employee_id=outgoing.employee_id,
+        outgoing_employee_name=outgoing.trainee_name,
+        outgoing_to_stream_id=incoming_from_stream_id,
+        target_stream_id=target_stream_id,
+        swap_source=swap_source,
+        sme_request_id=sme_request_id,
+        incoming_score=inc_score,
+        outgoing_score=out_score,
+        score_diff=diff,
+        performed_by_email=performed_by_email,
+    )
+    db.add(record)
+    return record
+
+
+def _build_swap_record_response(rec: SwapRecord, db: Session) -> SwapRecordResponse:
+    return SwapRecordResponse(
+        id=rec.id,
+        batch_name=rec.batch_name,
+        incoming_employee_id=rec.incoming_employee_id,
+        incoming_employee_name=rec.incoming_employee_name,
+        incoming_from_stream_id=rec.incoming_from_stream_id,
+        incoming_from_stream_name=_stream_name(rec.incoming_from_stream_id, db),
+        outgoing_employee_id=rec.outgoing_employee_id,
+        outgoing_employee_name=rec.outgoing_employee_name,
+        outgoing_to_stream_id=rec.outgoing_to_stream_id,
+        outgoing_to_stream_name=_stream_name(rec.outgoing_to_stream_id, db),
+        target_stream_id=rec.target_stream_id,
+        target_stream_name=_stream_name(rec.target_stream_id, db),
+        swap_source=rec.swap_source,
+        sme_request_id=rec.sme_request_id,
+        incoming_score=rec.incoming_score,
+        outgoing_score=rec.outgoing_score,
+        score_diff=rec.score_diff,
+        performed_by_email=rec.performed_by_email,
+        created_at=rec.created_at,
+        is_cancelled=rec.is_cancelled,
+        cancelled_at=rec.cancelled_at,
+        cancelled_by_email=rec.cancelled_by_email,
+    )
 
 
 def _build_response(alloc: TraineeAllocation, db: Session) -> TraineeAllocationResponse:
@@ -164,6 +229,44 @@ def get_allocations(
 
 # ── Manual override ──────────────────────────────────────────────────────────
 
+@router.get("/{batch_name}/{employee_id}/swap-suggestions", response_model=list[SwapCandidate])
+def get_override_swap_suggestions(
+    batch_name: str,
+    employee_id: str,
+    target_stream_id: int,
+    db: Session = Depends(get_db),
+    _=Depends(require_manager_or_above),
+):
+    incoming = db.query(TraineeAllocation).filter_by(batch_name=batch_name, employee_id=employee_id).first()
+    if not incoming:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Trainee not found")
+
+    incoming_score = incoming.composite_score or 0.0
+
+    all_in_batch = db.query(TraineeAllocation).filter(
+        TraineeAllocation.batch_name == batch_name,
+        TraineeAllocation.employee_id != employee_id,
+    ).all()
+    stream_trainees = [
+        t for t in all_in_batch
+        if (t.manual_stream_id if t.manual_stream_id is not None else t.suggested_stream_id) == target_stream_id
+    ]
+
+    ranked = sorted(stream_trainees, key=lambda t: abs((t.composite_score or 0.0) - incoming_score))[:3]
+
+    return [
+        SwapCandidate(
+            employee_id=t.employee_id,
+            trainee_name=t.trainee_name,
+            composite_score=t.composite_score,
+            score_diff=round(abs((t.composite_score or 0.0) - incoming_score), 2)
+            if incoming.composite_score is not None and t.composite_score is not None
+            else None,
+        )
+        for t in ranked
+    ]
+
+
 @router.patch("/{batch_name}/{employee_id}/override", response_model=TraineeAllocationResponse)
 def set_override(
     batch_name: str,
@@ -188,10 +291,62 @@ def set_override(
     if not stream:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Stream not found in this batch")
 
+    effective_stream_id = alloc.manual_stream_id if alloc.manual_stream_id is not None else alloc.suggested_stream_id
+    if effective_stream_id == body.stream_id:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Trainee is already in this stream.",
+        )
+
+    now = datetime.now(timezone.utc)
+    former_stream_id = effective_stream_id
+
+    # Auto-cancel any active swap where this trainee was the incoming side.
+    # The outgoing trainee from that swap must be reverted to their pre-swap stream.
+    prior_swap = (
+        db.query(SwapRecord)
+        .filter_by(batch_name=batch_name, incoming_employee_id=employee_id, is_cancelled=False)
+        .first()
+    )
+    if prior_swap:
+        prior_outgoing = db.query(TraineeAllocation).filter_by(
+            batch_name=batch_name, employee_id=prior_swap.outgoing_employee_id
+        ).first()
+        if prior_outgoing and not prior_outgoing.is_frozen:
+            prior_outgoing.manual_stream_id = prior_swap.target_stream_id
+            prior_outgoing.manual_override_reason = f"Swap #{prior_swap.id} auto-cancelled — incoming trainee was re-overridden"
+            prior_outgoing.overridden_by_email = current_user.email
+            prior_outgoing.overridden_at = now
+        prior_swap.is_cancelled = True
+        prior_swap.cancelled_at = now
+        prior_swap.cancelled_by_email = current_user.email
+
     alloc.manual_stream_id = body.stream_id
     alloc.manual_override_reason = body.reason
     alloc.overridden_by_email = current_user.email
-    alloc.overridden_at = datetime.now(timezone.utc)
+    alloc.overridden_at = now
+
+    if body.outgoing_employee_id:
+        outgoing = db.query(TraineeAllocation).filter_by(
+            batch_name=batch_name, employee_id=body.outgoing_employee_id
+        ).first()
+        if outgoing and former_stream_id is not None:
+            outgoing.manual_stream_id = former_stream_id
+            outgoing.manual_override_reason = f"Swapped out — {employee_id} moved to this stream's slot"
+            outgoing.overridden_by_email = current_user.email
+            outgoing.overridden_at = now
+            _create_swap_record(
+                db,
+                batch_name=batch_name,
+                incoming=alloc,
+                outgoing=outgoing,
+                target_stream_id=body.stream_id,
+                incoming_from_stream_id=former_stream_id,
+                swap_source="manual_override",
+                sme_request_id=None,
+                performed_by_email=current_user.email,
+            )
+
     db.commit()
     db.refresh(alloc)
     return _build_response(alloc, db)
@@ -202,7 +357,7 @@ def clear_override(
     batch_name: str,
     employee_id: str,
     db: Session = Depends(get_db),
-    _=Depends(require_manager_or_above),
+    current_user=Depends(require_manager_or_above),
 ):
     alloc = db.query(TraineeAllocation).filter_by(
         batch_name=batch_name, employee_id=employee_id
@@ -216,6 +371,27 @@ def clear_override(
     if alloc.is_frozen:
         raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="This trainee's allocation is frozen. Unfreeze before clearing the override.")
 
+    now = datetime.now(timezone.utc)
+
+    # Auto-cancel any active swap where this trainee was the incoming side.
+    prior_swap = (
+        db.query(SwapRecord)
+        .filter_by(batch_name=batch_name, incoming_employee_id=employee_id, is_cancelled=False)
+        .first()
+    )
+    if prior_swap:
+        prior_outgoing = db.query(TraineeAllocation).filter_by(
+            batch_name=batch_name, employee_id=prior_swap.outgoing_employee_id
+        ).first()
+        if prior_outgoing and not prior_outgoing.is_frozen:
+            prior_outgoing.manual_stream_id = prior_swap.target_stream_id
+            prior_outgoing.manual_override_reason = f"Swap #{prior_swap.id} auto-cancelled — incoming trainee's override was cleared"
+            prior_outgoing.overridden_by_email = current_user.email
+            prior_outgoing.overridden_at = now
+        prior_swap.is_cancelled = True
+        prior_swap.cancelled_at = now
+        prior_swap.cancelled_by_email = current_user.email
+
     alloc.manual_stream_id = None
     alloc.manual_override_reason = None
     alloc.overridden_by_email = None
@@ -223,6 +399,71 @@ def clear_override(
     db.commit()
     db.refresh(alloc)
     return _build_response(alloc, db)
+
+
+# ── Swap records ────────────────────────────────────────────────────────────
+
+@router.get("/{batch_name}/swaps", response_model=list[SwapRecordResponse])
+def list_swap_records(
+    batch_name: str,
+    db: Session = Depends(get_db),
+    _=Depends(require_manager_or_above),
+):
+    records = (
+        db.query(SwapRecord)
+        .filter_by(batch_name=batch_name)
+        .order_by(SwapRecord.created_at.desc())
+        .all()
+    )
+    return [_build_swap_record_response(r, db) for r in records]
+
+
+@router.post("/{batch_name}/swaps/{swap_id}/cancel", response_model=SwapRecordResponse)
+def cancel_swap(
+    batch_name: str,
+    swap_id: int,
+    db: Session = Depends(get_db),
+    current_user=Depends(require_manager_or_above),
+):
+    rec = db.query(SwapRecord).filter_by(id=swap_id, batch_name=batch_name).first()
+    if not rec:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Swap record not found")
+    if rec.is_cancelled:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Swap has already been cancelled")
+
+    cfg = get_or_create_config(batch_name, db)
+    if cfg.is_frozen:
+        raise HTTPException(status_code=status.HTTP_423_LOCKED, detail="Batch allocation is frozen. Unfreeze before cancelling a swap.")
+
+    now = datetime.now(timezone.utc)
+
+    # Revert incoming trainee back to their pre-swap stream
+    incoming = db.query(TraineeAllocation).filter_by(
+        batch_name=batch_name, employee_id=rec.incoming_employee_id
+    ).first()
+    if incoming and not incoming.is_frozen:
+        incoming.manual_stream_id = rec.incoming_from_stream_id
+        incoming.manual_override_reason = f"Swap #{rec.id} cancelled — reverted to pre-swap stream"
+        incoming.overridden_by_email = current_user.email
+        incoming.overridden_at = now
+
+    # Revert outgoing trainee back to the target stream (where they were before the swap)
+    outgoing = db.query(TraineeAllocation).filter_by(
+        batch_name=batch_name, employee_id=rec.outgoing_employee_id
+    ).first()
+    if outgoing and not outgoing.is_frozen:
+        outgoing.manual_stream_id = rec.target_stream_id
+        outgoing.manual_override_reason = f"Swap #{rec.id} cancelled — reverted to pre-swap stream"
+        outgoing.overridden_by_email = current_user.email
+        outgoing.overridden_at = now
+
+    rec.is_cancelled = True
+    rec.cancelled_at = now
+    rec.cancelled_by_email = current_user.email
+
+    db.commit()
+    db.refresh(rec)
+    return _build_swap_record_response(rec, db)
 
 
 # ── Freeze / Unfreeze ────────────────────────────────────────────────────────
@@ -591,15 +832,28 @@ def create_sme_associate_request(
                 detail="You are not assigned to this stream",
             )
 
-    existing_eids = {
-        row.employee_id
-        for row in db.query(TraineeAllocation.employee_id).filter_by(batch_name=batch_name).all()
-    }
-    invalid = [eid for eid in body.requested_employee_ids if eid not in existing_eids]
+    allocations = (
+        db.query(TraineeAllocation.employee_id, TraineeAllocation.manual_stream_id, TraineeAllocation.suggested_stream_id)
+        .filter_by(batch_name=batch_name)
+        .all()
+    )
+    alloc_map = {row.employee_id: row for row in allocations}
+
+    invalid = [eid for eid in body.requested_employee_ids if eid not in alloc_map]
     if invalid:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail=f"Employee IDs not found in this batch: {invalid}",
+        )
+
+    already_in_stream = [
+        eid for eid in body.requested_employee_ids
+        if (alloc_map[eid].manual_stream_id or alloc_map[eid].suggested_stream_id) == body.stream_id
+    ]
+    if already_in_stream:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"The following trainees are already in this stream: {already_in_stream}",
         )
 
     req = SMEAssociateRequest(
@@ -646,6 +900,67 @@ def list_sme_requests(
     return [_build_sme_request_response(r, db) for r in requests]
 
 
+@router.get("/{batch_name}/sme-requests/{request_id}/swap-suggestions", response_model=list[SwapSuggestion])
+def get_swap_suggestions(
+    batch_name: str,
+    request_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_manager_or_above),
+):
+    req = db.query(SMEAssociateRequest).filter_by(id=request_id, batch_name=batch_name).first()
+    if not req:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Request not found")
+
+    requested_eids = json.loads(req.requested_employee_ids)
+
+    incoming_allocs = {
+        row.employee_id: row
+        for row in db.query(TraineeAllocation)
+        .filter(TraineeAllocation.batch_name == batch_name, TraineeAllocation.employee_id.in_(requested_eids))
+        .all()
+    }
+
+    # Trainees currently in the target stream (effective stream = manual if set, else suggested)
+    all_in_batch = db.query(TraineeAllocation).filter(
+        TraineeAllocation.batch_name == batch_name,
+        TraineeAllocation.employee_id.notin_(requested_eids),
+    ).all()
+    stream_trainees = [
+        t for t in all_in_batch
+        if (t.manual_stream_id if t.manual_stream_id is not None else t.suggested_stream_id) == req.stream_id
+    ]
+
+    result: list[SwapSuggestion] = []
+    for eid in requested_eids:
+        incoming = incoming_allocs.get(eid)
+        if not incoming:
+            continue
+        incoming_score = incoming.composite_score or 0.0
+        incoming_eff_id = incoming.manual_stream_id if incoming.manual_stream_id is not None else incoming.suggested_stream_id
+
+        ranked = sorted(stream_trainees, key=lambda t: abs((t.composite_score or 0.0) - incoming_score))[:3]
+
+        result.append(SwapSuggestion(
+            employee_id=eid,
+            trainee_name=incoming.trainee_name,
+            composite_score=incoming.composite_score,
+            current_stream_name=_stream_name(incoming_eff_id, db),
+            candidates=[
+                SwapCandidate(
+                    employee_id=t.employee_id,
+                    trainee_name=t.trainee_name,
+                    composite_score=t.composite_score,
+                    score_diff=round(abs((t.composite_score or 0.0) - incoming_score), 2)
+                    if incoming.composite_score is not None and t.composite_score is not None
+                    else None,
+                )
+                for t in ranked
+            ],
+        ))
+
+    return result
+
+
 @router.post("/{batch_name}/sme-requests/{request_id}/review", response_model=SMEAssociateRequestResponse)
 def review_sme_request(
     batch_name: str,
@@ -680,6 +995,46 @@ def review_sme_request(
     req.reviewed_by_email = current_user.email
     req.reviewed_at = datetime.now(timezone.utc)
     req.review_notes = body.review_notes
+
+    # Execute approved swaps (move incoming to target stream; move outgoing to incoming's former stream)
+    if body.swaps:
+        approved_set = set(body.approved_employee_ids)
+        all_eids = {eid for pair in body.swaps for eid in (pair.incoming_employee_id, pair.outgoing_employee_id)}
+        alloc_map = {
+            row.employee_id: row
+            for row in db.query(TraineeAllocation)
+            .filter(TraineeAllocation.batch_name == batch_name, TraineeAllocation.employee_id.in_(all_eids))
+            .all()
+        }
+        now = datetime.now(timezone.utc)
+        for pair in body.swaps:
+            if pair.incoming_employee_id not in approved_set:
+                continue
+            incoming = alloc_map.get(pair.incoming_employee_id)
+            outgoing = alloc_map.get(pair.outgoing_employee_id)
+            if not incoming or not outgoing:
+                continue
+            outgoing_dest = incoming.manual_stream_id if incoming.manual_stream_id is not None else incoming.suggested_stream_id
+            incoming.manual_stream_id = req.stream_id
+            incoming.manual_override_reason = f"Approved via SME request #{req.id}"
+            incoming.overridden_by_email = current_user.email
+            incoming.overridden_at = now
+            if outgoing_dest is not None:
+                outgoing.manual_stream_id = outgoing_dest
+                outgoing.manual_override_reason = f"Swapped out via SME request #{req.id}"
+                outgoing.overridden_by_email = current_user.email
+                outgoing.overridden_at = now
+            _create_swap_record(
+                db,
+                batch_name=batch_name,
+                incoming=incoming,
+                outgoing=outgoing,
+                target_stream_id=req.stream_id,
+                incoming_from_stream_id=outgoing_dest,
+                swap_source="sme_request",
+                sme_request_id=req.id,
+                performed_by_email=current_user.email,
+            )
 
     status_label = new_status.value.replace("_", " ").title()
     create_notification(

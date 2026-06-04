@@ -4,7 +4,7 @@ import type { Notification } from '../types/notifications';
 import type { SyncedBatch, SyncedDpiRecord, SyncedSubjectScore, SyncStatus, SyncTriggerResponse } from '../types/sync';
 import type { BatchStream, SMEAssignment, StreamCreate, StreamSuggestion, StreamTemplate, StreamTemplateDetail, SubjectWeight, WeightProposal, WeightsSet } from '../types/streams';
 import type { SpringBootBatch } from '../types/batch_management';
-import type { AllocationAIRecommendation, AllocationConfig, AllocationRunResult, SMEAssociateRequest, TraineeAllocation } from '../types/allocation';
+import type { AllocationAIRecommendation, AllocationConfig, AllocationRunResult, SMEAssociateRequest, SwapCandidate, SwapPair, SwapRecord, SwapSuggestion, TraineeAllocation } from '../types/allocation';
 import type {
   BRCreate,
   BRResponse,
@@ -115,6 +115,8 @@ export const streamsApi = {
                      api.patch<BatchStream>(`/batches/${encodeURIComponent(batchName)}/streams/${streamId}/trainee-pct`, { trainee_pct }),
   setWeights:      (batchName: string, streamId: number, body: WeightsSet) =>
                      api.post<BatchStream>(`/batches/${encodeURIComponent(batchName)}/streams/${streamId}/weights`, body),
+  submitProposal:  (batchName: string, streamId: number, body: WeightsSet) =>
+                     api.post<WeightProposal>(`/batches/${encodeURIComponent(batchName)}/streams/${streamId}/proposals`, body),
   listProposals:   (batchName: string, streamId: number) =>
                      api.get<WeightProposal[]>(`/batches/${encodeURIComponent(batchName)}/streams/${streamId}/proposals`),
   approveProposal: (batchName: string, streamId: number, proposalId: number) =>
@@ -215,7 +217,9 @@ export const allocationApi = {
                 api.post<AllocationRunResult>(`/allocation/${encodeURIComponent(batchName)}/run`, { mode }),
   list:       (batchName: string) =>
                 api.get<TraineeAllocation[]>(`/allocation/${encodeURIComponent(batchName)}`),
-  setOverride: (batchName: string, employeeId: string, body: { stream_id: number; reason: string }) =>
+  getOverrideSwapSuggestions: (batchName: string, employeeId: string, targetStreamId: number) =>
+                api.get<SwapCandidate[]>(`/allocation/${encodeURIComponent(batchName)}/${encodeURIComponent(employeeId)}/swap-suggestions`, { params: { target_stream_id: targetStreamId } }),
+  setOverride: (batchName: string, employeeId: string, body: { stream_id: number; reason: string; outgoing_employee_id?: string }) =>
                 api.patch<TraineeAllocation>(`/allocation/${encodeURIComponent(batchName)}/${encodeURIComponent(employeeId)}/override`, body),
   clearOverride: (batchName: string, employeeId: string) =>
                 api.delete<TraineeAllocation>(`/allocation/${encodeURIComponent(batchName)}/${encodeURIComponent(employeeId)}/override`),
@@ -229,6 +233,10 @@ export const allocationApi = {
                 api.post<TraineeAllocation>(`/allocation/${encodeURIComponent(batchName)}/${encodeURIComponent(employeeId)}/unfreeze`),
   exportExcel: (batchName: string) =>
                 api.get(`/allocation/${encodeURIComponent(batchName)}/export`, { responseType: 'blob' }),
+  listSwaps: (batchName: string) =>
+                api.get<SwapRecord[]>(`/allocation/${encodeURIComponent(batchName)}/swaps`),
+  cancelSwap: (batchName: string, swapId: number) =>
+                api.post<SwapRecord>(`/allocation/${encodeURIComponent(batchName)}/swaps/${swapId}/cancel`),
 };
 
 export const allocationAiApi = {
@@ -247,7 +255,9 @@ export const smeRequestsApi = {
     api.post<SMEAssociateRequest>(`/allocation/${encodeURIComponent(batchName)}/sme-requests`, body),
   list: (batchName: string) =>
     api.get<SMEAssociateRequest[]>(`/allocation/${encodeURIComponent(batchName)}/sme-requests`),
-  review: (batchName: string, requestId: number, body: { approved_employee_ids: string[]; review_notes?: string }) =>
+  getSwapSuggestions: (batchName: string, requestId: number) =>
+    api.get<SwapSuggestion[]>(`/allocation/${encodeURIComponent(batchName)}/sme-requests/${requestId}/swap-suggestions`),
+  review: (batchName: string, requestId: number, body: { approved_employee_ids: string[]; review_notes?: string; swaps?: SwapPair[] }) =>
     api.post<SMEAssociateRequest>(`/allocation/${encodeURIComponent(batchName)}/sme-requests/${requestId}/review`, body),
   cancel: (batchName: string, requestId: number) =>
     api.delete(`/allocation/${encodeURIComponent(batchName)}/sme-requests/${requestId}`),

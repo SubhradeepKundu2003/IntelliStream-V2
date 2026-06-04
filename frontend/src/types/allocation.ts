@@ -63,6 +63,51 @@ export interface AllocationAIRecommendation {
   created_at: string;
 }
 
+export interface SwapRecord {
+  id: number;
+  batch_name: string;
+  incoming_employee_id: string;
+  incoming_employee_name: string;
+  incoming_from_stream_id: number | null;
+  incoming_from_stream_name: string | null;
+  outgoing_employee_id: string;
+  outgoing_employee_name: string;
+  outgoing_to_stream_id: number | null;
+  outgoing_to_stream_name: string | null;
+  target_stream_id: number;
+  target_stream_name: string | null;
+  swap_source: 'sme_request' | 'manual_override';
+  sme_request_id: number | null;
+  incoming_score: number | null;
+  outgoing_score: number | null;
+  score_diff: number | null;
+  performed_by_email: string;
+  created_at: string;
+  is_cancelled: boolean;
+  cancelled_at: string | null;
+  cancelled_by_email: string | null;
+}
+
+export interface SwapCandidate {
+  employee_id: string;
+  trainee_name: string;
+  composite_score: number | null;
+  score_diff: number | null;
+}
+
+export interface SwapSuggestion {
+  employee_id: string;
+  trainee_name: string;
+  composite_score: number | null;
+  current_stream_name: string | null;
+  candidates: SwapCandidate[];
+}
+
+export interface SwapPair {
+  incoming_employee_id: string;
+  outgoing_employee_id: string;
+}
+
 export type SMERequestStatus = 'pending' | 'approved' | 'partially_approved' | 'rejected' | 'cancelled';
 
 export interface SMEAssociateRequest {

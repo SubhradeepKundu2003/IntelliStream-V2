@@ -74,6 +74,7 @@ function SetWeightsModal({
   subjects,
   userRole,
   onSaved,
+  onProposalSubmitted,
 }: {
   isOpen: boolean;
   onClose: () => void;
@@ -81,6 +82,7 @@ function SetWeightsModal({
   subjects: string[];
   userRole: string;
   onSaved: (updated: BatchStream) => void;
+  onProposalSubmitted?: () => void;
 }) {
   const [values, setValues] = useState<Record<string, string>>({});
   const [apiError, setApiError] = useState('');
@@ -123,8 +125,13 @@ function SetWeightsModal({
         subject_name: s,
         weight_pct: parseFloat(parseFloat(values[s] ?? '0').toFixed(2)),
       }));
-      const { data } = await streamsApi.setWeights(stream.batch_name, stream.id, { weights });
-      onSaved(data);
+      if (isSme) {
+        await streamsApi.submitProposal(stream.batch_name, stream.id, { weights });
+        onProposalSubmitted?.();
+      } else {
+        const { data } = await streamsApi.setWeights(stream.batch_name, stream.id, { weights });
+        onSaved(data);
+      }
       onClose();
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -1126,33 +1133,53 @@ function SplitCapacityModal({
 }) {
   const [inputMode, setInputMode] = useState<'pct' | 'count'>('pct');
   const [rawValues, setRawValues] = useState<Record<number, string>>({});
+  const [loadingCount, setLoadingCount] = useState(true);
   const [totalTrainees, setTotalTrainees] = useState(0);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
-
+  console.log("Total trainees:", totalTrainees, loadingCount);
   useEffect(() => {
     if (!isOpen) return;
+
+    setLoadingCount(true);
+
+    allocationApi.list(batchName)
+      .then(({ data }) => {
+        setTotalTrainees(data.length);
+      })
+      .catch(() => {
+        setTotalTrainees(0);
+      })
+      .finally(() => {
+        setLoadingCount(false);
+      });
+
     const init: Record<number, string> = {};
-    streams.forEach((s) => { init[s.id] = String(s.trainee_pct ?? 0); });
+    streams.forEach((s) => {
+      init[s.id] = String(s.trainee_pct ?? 0);
+    });
+
     setRawValues(init);
     setInputMode('pct');
     setError('');
-    // fetch trainee count for this batch so count-mode works
-    import('../services/api').then(({ allocationApi }) => {
-      allocationApi.list(batchName)
-        .then(({ data }) => setTotalTrainees(data.length))
-        .catch(() => setTotalTrainees(0));
-    });
-  }, [isOpen, batchName]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [isOpen, batchName]);
+  // eslint-disable-line react-hooks/exhaustive-deps
 
   const pctMap = useMemo(() => {
     const result: Record<number, number> = {};
+
     streams.forEach((s) => {
       const v = Math.max(0, parseFloat(rawValues[s.id] ?? '0') || 0);
-      result[s.id] = inputMode === 'pct'
-        ? v
-        : totalTrainees > 0 ? parseFloat(((v / totalTrainees) * 100).toFixed(2)) : 0;
+
+      if (inputMode === 'pct') {
+        result[s.id] = v;
+      } else {
+        result[s.id] = totalTrainees > 0
+          ? parseFloat(((v / totalTrainees) * 100).toFixed(2))
+          : 0;
+      }
     });
+
     return result;
   }, [rawValues, inputMode, streams, totalTrainees]);
 
@@ -1175,53 +1202,35 @@ function SplitCapacityModal({
 
   const handleChange = (changedId: number, val: string) => {
     const num = parseFloat(val);
-    // Let the user finish typing — don't auto-adjust on incomplete input
-    if (val === '' || isNaN(num)) {
-      setRawValues((prev) => ({ ...prev, [changedId]: val }));
-      return;
-    }
 
-    const others = streams.filter((s) => s.id !== changedId);
+    // Allow typing
+    setRawValues((prev) => {
+      const newValues = { ...prev, [changedId]: val };
 
-    if (inputMode === 'pct') {
-      const newPct = Math.max(0, Math.min(100, num));
-      const remaining = parseFloat((100 - newPct).toFixed(4));
-      const otherPcts = others.map((s) => Math.max(0, parseFloat(rawValues[s.id] ?? '0') || 0));
-      const othersSum = otherPcts.reduce((a, b) => a + b, 0);
-      const newVals: Record<number, string> = { ...rawValues, [changedId]: String(newPct) };
-      let used = 0;
-      others.forEach((s, i) => {
-        const isLast = i === others.length - 1;
-        const raw = isLast
-          ? parseFloat((remaining - used).toFixed(2))
-          : othersSum > 0
-            ? parseFloat(((otherPcts[i] / othersSum) * remaining).toFixed(2))
-            : parseFloat((remaining / others.length).toFixed(2));
-        const share = Math.max(0, raw);
-        newVals[s.id] = String(share);
-        if (!isLast) used += share;
+      const index = streams.findIndex((s) => s.id === changedId);
+      if (index === -1) return newValues;
+
+      const nextStream = streams[index + 1];
+      if (!nextStream) return newValues; // last item → no adjustment
+
+      const currentPct = Math.max(0, num || 0);
+
+      // Calculate total except next
+      let totalExceptNext = 0;
+      streams.forEach((s, i) => {
+        if (i !== index && i !== index + 1) {
+          totalExceptNext += parseFloat(newValues[s.id] ?? '0') || 0;
+        }
       });
-      setRawValues(newVals);
-    } else {
-      const newCount = Math.max(0, Math.min(totalTrainees, Math.round(num)));
-      const remaining = Math.max(0, totalTrainees - newCount);
-      const otherCounts = others.map((s) => Math.max(0, parseInt(rawValues[s.id] ?? '0') || 0));
-      const othersSum = otherCounts.reduce((a, b) => a + b, 0);
-      const newVals: Record<number, string> = { ...rawValues, [changedId]: String(newCount) };
-      let used = 0;
-      others.forEach((s, i) => {
-        const isLast = i === others.length - 1;
-        const share = Math.max(0, isLast
-          ? remaining - used
-          : othersSum > 0
-            ? Math.round((otherCounts[i] / othersSum) * remaining)
-            : Math.floor(remaining / others.length));
-        newVals[s.id] = String(share);
-        if (!isLast) used += share;
-      });
-      setRawValues(newVals);
-    }
+
+      const remaining = 100 - totalExceptNext - currentPct;
+
+      newValues[nextStream.id] = String(Math.max(0, remaining));
+
+      return newValues;
+    });
   };
+
 
   const distributeEqually = () => {
     const count = streams.length;
@@ -1295,23 +1304,30 @@ function SplitCapacityModal({
             <button
               onClick={() => handleModeSwitch('pct')}
               disabled={isBatchFrozen}
-              className={`px-3 py-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                inputMode === 'pct'
-                  ? 'bg-tcs-blue text-white'
-                  : 'text-tcs-gray-500 dark:text-tcs-gray-400 hover:bg-tcs-gray-50 dark:hover:bg-tcs-gray-700'
-              }`}
+              className={`px-3 py-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${inputMode === 'pct'
+                ? 'bg-tcs-blue text-white'
+                : 'text-tcs-gray-500 dark:text-tcs-gray-400 hover:bg-tcs-gray-50 dark:hover:bg-tcs-gray-700'
+                }`}
             >
               % Percent
             </button>
             <button
               onClick={() => handleModeSwitch('count')}
-              disabled={totalTrainees === 0 || isBatchFrozen}
-              title={isBatchFrozen ? 'Batch is frozen' : totalTrainees === 0 ? 'No trainee data available for this batch' : undefined}
-              className={`px-3 py-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
-                inputMode === 'count'
-                  ? 'bg-tcs-blue text-white'
-                  : 'text-tcs-gray-500 dark:text-tcs-gray-400 hover:bg-tcs-gray-50 dark:hover:bg-tcs-gray-700'
-              }`}
+              disabled={loadingCount || totalTrainees === 0 || isBatchFrozen}
+              title={
+                isBatchFrozen
+                  ? 'Batch is frozen'
+                  : loadingCount
+                    ? 'Loading trainee count...'
+                    : totalTrainees === 0
+                      ? 'No trainees available'
+                      : undefined
+              }
+
+              className={`px-3 py-1.5 transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${inputMode === 'count'
+                ? 'bg-tcs-blue text-white'
+                : 'text-tcs-gray-500 dark:text-tcs-gray-400 hover:bg-tcs-gray-50 dark:hover:bg-tcs-gray-700'
+                }`}
             >
               # Count
             </button>
@@ -1395,13 +1411,12 @@ function SplitCapacityModal({
         </div>
 
         {/* Total indicator */}
-        <div className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium ${
-          isOver
-            ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400'
-            : Math.abs(totalPct - 100) <= 0.01
-              ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400'
-              : 'bg-tcs-gray-50 dark:bg-tcs-gray-900/40 text-tcs-gray-600 dark:text-tcs-gray-400'
-        }`}>
+        <div className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium ${isOver
+          ? 'bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400'
+          : Math.abs(totalPct - 100) <= 0.01
+            ? 'bg-green-50 dark:bg-green-900/20 text-green-700 dark:text-green-400'
+            : 'bg-tcs-gray-50 dark:bg-tcs-gray-900/40 text-tcs-gray-600 dark:text-tcs-gray-400'
+          }`}>
           <span>Total: {totalPct.toFixed(1)}%</span>
           {isOver && <span>Exceeds 100% — reduce one or more streams</span>}
           {!isOver && unallocated > 0.01 && <span>{unallocated.toFixed(1)}% unallocated</span>}
@@ -1585,6 +1600,7 @@ export default function StreamManagementPage() {
         subjects={selectedBatch?.subjects ?? []}
         userRole={user?.role ?? ''}
         onSaved={handleWeightsSaved}
+        onProposalSubmitted={() => selectedBatch && fetchStreams(selectedBatch.batch_name)}
       />
       <ReviewProposalModal
         isOpen={!!reviewTarget}

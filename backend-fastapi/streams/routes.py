@@ -312,6 +312,67 @@ def set_weights(
     return _stream_response(stream, db)
 
 
+@router.post("/{batch_name}/streams/{stream_id}/proposals", response_model=WeightProposalResponse, status_code=status.HTTP_201_CREATED)
+def submit_weight_proposal(
+    batch_name: str,
+    stream_id: int,
+    body: WeightsSet,
+    db: Session = Depends(get_db),
+    user: User = Depends(get_current_user),
+):
+    if user.role != Role.sme:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Only SMEs can submit weight proposals. Managers and admins can set weights directly.",
+        )
+
+    batch_subjects = _get_batch_subjects(batch_name, db)
+    stream = db.query(BatchStream).filter(BatchStream.id == stream_id, BatchStream.batch_name == batch_name, BatchStream.is_active == True).first()
+    if not stream:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Stream not found")
+
+    assignment = db.query(BatchStreamSME).filter(
+        BatchStreamSME.stream_id == stream_id,
+        BatchStreamSME.user_id == user.id,
+        BatchStreamSME.is_active == True,
+    ).first()
+    if not assignment:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="You are not assigned as SME for this stream.",
+        )
+
+    if _get_pending_proposal(stream_id, db):
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="A weight change proposal is already pending approval for this stream.",
+        )
+
+    _validate_weights_against_batch(batch_name, body, batch_subjects)
+
+    proposal = StreamWeightProposal(
+        stream_id=stream_id,
+        proposed_by_email=user.email,
+        status=ProposalStatus.pending,
+        proposed_weights_json=json.dumps(
+            [{"subject_name": w.subject_name, "weight_pct": w.weight_pct} for w in body.weights]
+        ),
+    )
+    db.add(proposal)
+
+    managers = db.query(User).filter(User.role.in_([Role.admin, Role.manager]), User.is_active == True).all()
+    for manager in managers:
+        create_notification(
+            db, manager.email, NotificationType.proposal_submitted,
+            "New Weight Proposal",
+            f"{user.email} submitted a weight change proposal for stream '{stream.name}' in batch '{batch_name}'.",
+        )
+
+    db.commit()
+    db.refresh(proposal)
+    return _proposal_response(proposal)
+
+
 @router.get("/{batch_name}/streams/{stream_id}/proposals", response_model=list[WeightProposalResponse])
 def list_proposals(
     batch_name: str,

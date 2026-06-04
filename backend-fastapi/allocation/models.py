@@ -69,6 +69,42 @@ class TraineeAllocation(Base):
     updated_at = Column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
 
 
+class SwapRecord(Base):
+    __tablename__ = "swap_records"
+
+    id = Column(Integer, primary_key=True, index=True)
+    batch_name = Column(String, nullable=False, index=True)
+
+    # Who moved IN (to target_stream)
+    incoming_employee_id = Column(String, nullable=False)
+    incoming_employee_name = Column(String, nullable=False)
+    incoming_from_stream_id = Column(Integer, ForeignKey("batch_streams.id"), nullable=True)
+
+    # Who moved OUT (from target_stream to incoming's former stream)
+    outgoing_employee_id = Column(String, nullable=False)
+    outgoing_employee_name = Column(String, nullable=False)
+    outgoing_to_stream_id = Column(Integer, ForeignKey("batch_streams.id"), nullable=True)
+
+    # The stream being swapped into
+    target_stream_id = Column(Integer, ForeignKey("batch_streams.id"), nullable=False)
+
+    # Trigger: "sme_request" or "manual_override"
+    swap_source = Column(String, nullable=False)
+    sme_request_id = Column(Integer, ForeignKey("sme_associate_requests.id"), nullable=True)
+
+    # Score context at time of swap
+    incoming_score = Column(Float, nullable=True)
+    outgoing_score = Column(Float, nullable=True)
+    score_diff = Column(Float, nullable=True)
+
+    performed_by_email = Column(String, nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+
+    is_cancelled = Column(Boolean, nullable=False, default=False)
+    cancelled_at = Column(DateTime(timezone=True), nullable=True)
+    cancelled_by_email = Column(String, nullable=True)
+
+
 class AllocationAIRecommendation(Base):
     __tablename__ = "allocation_ai_recommendations"
 

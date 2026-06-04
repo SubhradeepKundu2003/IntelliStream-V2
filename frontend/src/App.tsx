@@ -14,6 +14,7 @@ import StreamTemplatesPage from './pages/admin/StreamTemplatesPage';
 import TraineePage from './pages/admin/TraineePage';
 import BusinessRequirementsPage from './pages/admin/BusinessRequirementsPage';
 import AllocationPage from './pages/AllocationPage';
+import SMERequestsPage from './pages/SMERequestsPage';
 import LandingPage from './pages/LandingPage';
 
 export default function App() {
@@ -59,6 +60,7 @@ export default function App() {
                 {/* Allocation — accessible to SME too (read-only view + associate requests) */}
                 <Route element={<RoleRoute roles={['admin', 'manager', 'sme']} />}>
                   <Route path="/allocation" element={<AllocationPage />} />
+                  <Route path="/sme-requests" element={<SMERequestsPage />} />
                 </Route>
               </Route>
             </Route>

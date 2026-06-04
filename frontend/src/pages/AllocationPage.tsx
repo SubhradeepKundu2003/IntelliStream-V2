@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  AlertCircle, ArrowDownUp, Brain, ChevronDown, ChevronRight, Download, Filter,
+  AlertCircle, ArrowDownUp, ArrowLeftRight, Brain, ChevronDown, ChevronRight, Download, Filter,
   Info, Loader2, Lock, Play, RefreshCw, Sliders, SortDesc, Unlock, UserCheck, UserX, Users, X,
 } from 'lucide-react';
 import { allocationAiApi, allocationApi, smeRequestsApi, streamsApi, syncApi } from '../services/api';
-import type { AllocationAIRecommendation, AllocationConfig, AllocationRunResult, SMEAssociateRequest, SMERequestStatus, TraineeAllocation } from '../types/allocation';
+import type { AllocationAIRecommendation, AllocationConfig, AllocationRunResult, SMEAssociateRequest, SMERequestStatus, SwapCandidate, TraineeAllocation } from '../types/allocation';
 import type { BatchStream } from '../types/streams';
 import type { SyncedBatch } from '../types/sync';
 import { useAuth } from '../contexts/AuthContext';
@@ -166,6 +166,7 @@ function SMERequestModal({
   }, [isOpen, smeStreams]);
 
   const filtered = allocations.filter((a) => {
+    if (streamId !== '' && a.effective_stream_id === streamId) return false;
     const q = search.toLowerCase();
     return a.trainee_name.toLowerCase().includes(q) || a.employee_id.toLowerCase().includes(q);
   });
@@ -213,7 +214,7 @@ function SMERequestModal({
                 <label className="block text-sm font-medium text-tcs-gray-700 dark:text-tcs-gray-300 mb-1">Stream</label>
                 <select
                   value={streamId}
-                  onChange={(e) => setStreamId(e.target.value === '' ? '' : Number(e.target.value))}
+                  onChange={(e) => { setStreamId(e.target.value === '' ? '' : Number(e.target.value)); setSelected(new Set()); }}
                   className="w-full rounded-lg border border-tcs-gray-300 dark:border-tcs-gray-600
                     bg-tcs-white dark:bg-tcs-gray-700 text-tcs-gray-900 dark:text-tcs-gray-100
                     px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-tcs-blue"
@@ -429,26 +430,48 @@ function OverrideModal({
   onClose,
   trainee,
   streams,
+  batchName,
   onSave,
 }: {
   isOpen: boolean;
   onClose: () => void;
   trainee: TraineeAllocation | null;
   streams: BatchStream[];
-  onSave: (streamId: number, reason: string) => Promise<void>;
+  batchName: string;
+  onSave: (streamId: number, reason: string, outgoingEmployeeId?: string) => Promise<void>;
 }) {
   const [streamId, setStreamId] = useState<number | ''>('');
   const [reason, setReason] = useState('');
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(false);
+  const [swapCandidates, setSwapCandidates] = useState<SwapCandidate[]>([]);
+  const [loadingSwaps, setLoadingSwaps] = useState(false);
+  const [selectedSwap, setSelectedSwap] = useState('');
 
   useEffect(() => {
     if (isOpen && trainee) {
       setStreamId(trainee.manual_stream_id ?? '');
       setReason(trainee.manual_override_reason ?? '');
       setError('');
+      setSwapCandidates([]);
+      setSelectedSwap('');
     }
   }, [isOpen, trainee]);
+
+  useEffect(() => {
+    if (!streamId || !trainee || !batchName) {
+      setSwapCandidates([]);
+      setSelectedSwap('');
+      return;
+    }
+    setLoadingSwaps(true);
+    setSelectedSwap('');
+    allocationApi
+      .getOverrideSwapSuggestions(batchName, trainee.employee_id, Number(streamId))
+      .then((r) => setSwapCandidates(r.data))
+      .catch(() => setSwapCandidates([]))
+      .finally(() => setLoadingSwaps(false));
+  }, [streamId, trainee, batchName]);
 
   const handleSave = async () => {
     if (!streamId) { setError('Select a stream'); return; }
@@ -456,7 +479,7 @@ function OverrideModal({
     setError('');
     setLoading(true);
     try {
-      await onSave(Number(streamId), reason.trim());
+      await onSave(Number(streamId), reason.trim(), selectedSwap || undefined);
       onClose();
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -466,8 +489,11 @@ function OverrideModal({
     }
   };
 
+  const fmtScore = (v: number | null) => (v === null ? '—' : v.toFixed(1));
+  const targetStreamName = streams.find((s) => s.id === streamId)?.name;
+
   return (
-    <Modal isOpen={isOpen} onClose={onClose} title={`Override — ${trainee?.trainee_name ?? ''}`}>
+    <Modal isOpen={isOpen} onClose={onClose} title={`Override — ${trainee?.trainee_name ?? ''}`} width="w-full max-w-lg">
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-tcs-gray-700 dark:text-tcs-gray-300 mb-1">
@@ -481,21 +507,81 @@ function OverrideModal({
               px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-tcs-blue"
           >
             <option value="">Select a stream…</option>
-            {streams.map((s) => (
-              <option key={s.id} value={s.id}>{s.name}</option>
-            ))}
+            {streams
+              .filter((s) => s.id !== trainee?.effective_stream_id)
+              .map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
           </select>
         </div>
+
+        {streamId !== '' && (
+          <div>
+            <div className="flex items-center gap-1.5 mb-2">
+              <ArrowLeftRight size={13} className="text-tcs-blue" />
+              <p className="text-xs font-semibold text-tcs-gray-500 dark:text-tcs-gray-400 uppercase tracking-wide">
+                Swap with someone from "{targetStreamName}"
+              </p>
+            </div>
+            {loadingSwaps ? (
+              <div className="flex items-center gap-2 text-tcs-gray-400 text-xs py-2">
+                <Loader2 size={13} className="animate-spin" /> Loading suggestions…
+              </div>
+            ) : (
+              <div className="grid grid-cols-2 gap-2">
+                <label className={`flex flex-col gap-1 p-2.5 rounded-lg border-2 cursor-pointer transition-colors ${
+                  selectedSwap === ''
+                    ? 'border-tcs-blue bg-blue-50 dark:bg-tcs-blue/10'
+                    : 'border-tcs-gray-200 dark:border-tcs-gray-600 hover:border-tcs-gray-300'
+                }`}>
+                  <div className="flex items-center gap-2">
+                    <input type="radio" name="override-swap" checked={selectedSwap === ''} onChange={() => setSelectedSwap('')} className="accent-tcs-blue" />
+                    <span className="text-xs font-semibold text-tcs-gray-700 dark:text-tcs-gray-300">No swap</span>
+                  </div>
+                  <p className="text-xs text-tcs-gray-400 pl-5">Just move to stream</p>
+                </label>
+                {swapCandidates.length === 0 ? (
+                  <p className="text-xs text-tcs-gray-400 flex items-center">No trainees currently in this stream.</p>
+                ) : swapCandidates.map((c, i) => (
+                  <label key={c.employee_id} className={`flex flex-col gap-1 p-2.5 rounded-lg border-2 cursor-pointer transition-colors ${
+                    selectedSwap === c.employee_id
+                      ? 'border-tcs-blue bg-blue-50 dark:bg-tcs-blue/10'
+                      : 'border-tcs-gray-200 dark:border-tcs-gray-600 hover:border-tcs-gray-300'
+                  }`}>
+                    <div className="flex items-center gap-2">
+                      <input type="radio" name="override-swap" checked={selectedSwap === c.employee_id} onChange={() => setSelectedSwap(c.employee_id)} className="accent-tcs-blue" />
+                      <span className="text-xs font-semibold text-tcs-gray-700 dark:text-tcs-gray-300 truncate">{i === 0 ? '★ ' : ''}{c.trainee_name}</span>
+                    </div>
+                    <div className="pl-5 space-y-0.5">
+                      <p className="text-xs text-tcs-gray-400 truncate">{c.employee_id}</p>
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-xs font-medium text-tcs-gray-700 dark:text-tcs-gray-300">{fmtScore(c.composite_score)}</span>
+                        {c.score_diff !== null && (
+                          <span className={`text-xs font-semibold ${
+                            c.score_diff <= 5 ? 'text-green-600 dark:text-green-400'
+                            : c.score_diff <= 15 ? 'text-yellow-600 dark:text-yellow-400'
+                            : 'text-red-500 dark:text-red-400'
+                          }`}>Δ{c.score_diff.toFixed(1)}</span>
+                        )}
+                      </div>
+                    </div>
+                  </label>
+                ))}
+              </div>
+            )}
+            {swapCandidates.length > 0 && !loadingSwaps && (
+              <p className="text-xs text-tcs-gray-400 mt-1">★ Best match · Δ = score difference</p>
+            )}
+          </div>
+        )}
+
         <Input
           label="Reason for override"
           placeholder="e.g. Business requirement — client specifically requested this trainee"
           value={reason}
           onChange={(e) => setReason(e.target.value)}
-          error={error}
         />
-        {error && !reason && (
-          <p className="text-sm text-red-600 dark:text-red-400">{error}</p>
-        )}
+        {error && <p className="text-sm text-red-600 dark:text-red-400">{error}</p>}
         <div className="flex justify-end gap-3 pt-1">
           <Button variant="secondary" onClick={onClose} disabled={loading}>Cancel</Button>
           <Button onClick={handleSave} loading={loading}>Save Override</Button>
@@ -754,10 +840,18 @@ export default function AllocationPage() {
     }
   };
 
-  const handleOverrideSave = async (streamId: number, reason: string) => {
+  const handleOverrideSave = async (streamId: number, reason: string, outgoingEmployeeId?: string) => {
     if (!overrideTarget || !selectedBatch) return;
-    const res = await allocationApi.setOverride(selectedBatch, overrideTarget.employee_id, { stream_id: streamId, reason });
-    setAllocations((prev) => prev.map((a) => (a.employee_id === overrideTarget.employee_id ? res.data : a)));
+    const res = await allocationApi.setOverride(selectedBatch, overrideTarget.employee_id, {
+      stream_id: streamId,
+      reason,
+      outgoing_employee_id: outgoingEmployeeId,
+    });
+    if (outgoingEmployeeId) {
+      await loadBatchData(selectedBatch);
+    } else {
+      setAllocations((prev) => prev.map((a) => (a.employee_id === overrideTarget.employee_id ? res.data : a)));
+    }
   };
 
   const handleClearOverride = async (alloc: TraineeAllocation) => {
@@ -1599,6 +1693,7 @@ export default function AllocationPage() {
         onClose={() => setOverrideTarget(null)}
         trainee={overrideTarget}
         streams={streams}
+        batchName={selectedBatch}
         onSave={handleOverrideSave}
       />
 
