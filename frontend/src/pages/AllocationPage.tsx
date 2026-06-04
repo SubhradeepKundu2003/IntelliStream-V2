@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { toast } from 'react-toastify';
 import {
   AlertCircle, ArrowDownUp, ArrowLeftRight, Brain, ChevronDown, ChevronRight, Download, Filter,
   Info, Loader2, Lock, Play, RefreshCw, Sliders, SortDesc, Unlock, UserCheck, UserX, Users, X,
@@ -800,9 +801,11 @@ export default function AllocationPage() {
       const res = await allocationApi.run(selectedBatch, mode);
       setLastRunResult(res.data);
       await loadBatchData(selectedBatch);
+      toast.success(`Allocation complete — ${res.data.allocated} allocated, ${res.data.unallocated} unallocated`);
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(detail ?? 'Allocation run failed');
+      toast.error(detail ?? 'Allocation run failed');
     } finally {
       setLoadingRun(false);
     }
@@ -815,9 +818,11 @@ export default function AllocationPage() {
     try {
       const res = await allocationAiApi.generate(selectedBatch);
       setAiRecommendations(new Map(res.data.map((r) => [r.employee_id, r])));
+      toast.success(`AI analysed ${res.data.length} trainees`);
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setAiError(detail ?? 'AI recommendation generation failed');
+      toast.error(detail ?? 'AI recommendation generation failed');
     } finally {
       setLoadingAI(false);
     }
@@ -833,8 +838,10 @@ export default function AllocationPage() {
     try {
       const res = await allocationApi.updateConfig(selectedBatch, { score_weight: scoreW, dpi_weight: dpiW });
       setConfig(res.data);
+      toast.success('Scoring weights saved');
     } catch {
       setConfigError('Failed to save config');
+      toast.error('Failed to save scoring weights');
     } finally {
       setSavingConfig(false);
     }
@@ -849,8 +856,10 @@ export default function AllocationPage() {
     });
     if (outgoingEmployeeId) {
       await loadBatchData(selectedBatch);
+      toast.success('Override saved with swap');
     } else {
       setAllocations((prev) => prev.map((a) => (a.employee_id === overrideTarget.employee_id ? res.data : a)));
+      toast.success('Override saved');
     }
   };
 
@@ -858,6 +867,7 @@ export default function AllocationPage() {
     if (!selectedBatch) return;
     const res = await allocationApi.clearOverride(selectedBatch, alloc.employee_id);
     setAllocations((prev) => prev.map((a) => (a.employee_id === alloc.employee_id ? res.data : a)));
+    toast.success('Override cleared');
   };
 
   const handleFreezeBatch = async () => {
@@ -867,9 +877,11 @@ export default function AllocationPage() {
     try {
       const res = await allocationApi.freezeBatch(selectedBatch);
       setConfig(res.data);
+      toast.success('Batch frozen — allocation locked');
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(detail ?? 'Failed to freeze batch');
+      toast.error(detail ?? 'Failed to freeze batch');
     } finally {
       setLoadingFreeze(false);
     }
@@ -882,9 +894,11 @@ export default function AllocationPage() {
     try {
       const res = await allocationApi.unfreezeBatch(selectedBatch);
       setConfig(res.data);
+      toast.success('Batch unfrozen');
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(detail ?? 'Failed to unfreeze batch');
+      toast.error(detail ?? 'Failed to unfreeze batch');
     } finally {
       setLoadingFreeze(false);
     }
@@ -896,9 +910,10 @@ export default function AllocationPage() {
     try {
       const res = await allocationApi.freezeTrainee(selectedBatch, alloc.employee_id);
       setAllocations((prev) => prev.map((a) => (a.employee_id === alloc.employee_id ? res.data : a)));
+      toast.success(`${alloc.trainee_name} frozen`);
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(detail ?? 'Failed to freeze trainee');
+      toast.error(detail ?? 'Failed to freeze trainee');
     } finally {
       setLoadingFreezeId(null);
     }
@@ -910,9 +925,10 @@ export default function AllocationPage() {
     try {
       const res = await allocationApi.unfreezeTrainee(selectedBatch, alloc.employee_id);
       setAllocations((prev) => prev.map((a) => (a.employee_id === alloc.employee_id ? res.data : a)));
+      toast.success(`${alloc.trainee_name} unfrozen`);
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
-      setError(detail ?? 'Failed to unfreeze trainee');
+      toast.error(detail ?? 'Failed to unfreeze trainee');
     } finally {
       setLoadingFreezeId(null);
     }
@@ -922,18 +938,21 @@ export default function AllocationPage() {
     if (!selectedBatch) return;
     const res = await smeRequestsApi.create(selectedBatch, { stream_id: streamId, requested_employee_ids: employeeIds });
     setSmeRequests((prev) => [res.data, ...prev]);
+    toast.success('Associate request submitted');
   };
 
   const handleReviewRequest = async (requestId: number, approvedIds: string[], notes: string) => {
     if (!selectedBatch) return;
     const res = await smeRequestsApi.review(selectedBatch, requestId, { approved_employee_ids: approvedIds, review_notes: notes || undefined });
     setSmeRequests((prev) => prev.map((r) => (r.id === requestId ? res.data : r)));
+    toast.success(approvedIds.length === 0 ? 'Request rejected' : `${approvedIds.length} associate${approvedIds.length !== 1 ? 's' : ''} approved`);
   };
 
   const handleCancelSmeRequest = async (requestId: number) => {
     if (!selectedBatch) return;
     await smeRequestsApi.cancel(selectedBatch, requestId);
     setSmeRequests((prev) => prev.map((r) => r.id === requestId ? { ...r, status: 'cancelled' as const } : r));
+    toast.success('Request cancelled');
   };
 
   const handleExport = async () => {
@@ -947,8 +966,9 @@ export default function AllocationPage() {
       a.download = `allocation_${selectedBatch.replace(/\s+/g, '_')}.xlsx`;
       a.click();
       URL.revokeObjectURL(url);
+      toast.success('Excel exported');
     } catch {
-      setError('Failed to export Excel');
+      toast.error('Failed to export Excel');
     } finally {
       setLoadingExport(false);
     }

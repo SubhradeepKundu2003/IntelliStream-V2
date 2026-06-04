@@ -616,6 +616,49 @@ def export_allocation(
         max_len = max((len(str(c.value)) if c.value is not None else 0) for c in col)
         ws.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
 
+    # ── Sheet 2: per-stream subject averages ──────────────────────────
+    ws2 = wb.create_sheet(title="Stream Averages")
+
+    avg_headers = ["Stream", "Trainee Count"] + [s.title() for s in sorted_subjects]
+    for col_idx, h in enumerate(avg_headers, start=1):
+        cell = ws2.cell(row=1, column=col_idx, value=h)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = center
+
+    # Accumulate per-stream sums and counts
+    stream_sums: dict[str, dict[str, float]] = {}
+    stream_counts: dict[str, int] = {}
+    for alloc in rows:
+        effective_id = alloc.manual_stream_id if alloc.manual_stream_id is not None else alloc.suggested_stream_id
+        stream_label = _stream_name(effective_id, db) or "Unallocated"
+        breakdown: dict[str, float] = {}
+        try:
+            breakdown = json.loads(alloc.score_breakdown_json or "{}")
+        except (ValueError, TypeError):
+            pass
+        if stream_label not in stream_sums:
+            stream_sums[stream_label] = {s: 0.0 for s in sorted_subjects}
+            stream_counts[stream_label] = 0
+        stream_counts[stream_label] += 1
+        for s in sorted_subjects:
+            stream_sums[stream_label][s] += breakdown.get(s, 0.0)
+
+    stream_row_fill = PatternFill(fill_type="solid", fgColor="DEEAF1")
+    for row_idx, stream_label in enumerate(sorted(stream_sums.keys()), start=2):
+        count = stream_counts[stream_label]
+        avg_row = [stream_label, count] + [
+            round(stream_sums[stream_label][s] / count, 2) if count else 0
+            for s in sorted_subjects
+        ]
+        for col_idx, val in enumerate(avg_row, start=1):
+            cell = ws2.cell(row=row_idx, column=col_idx, value=val)
+            cell.fill = stream_row_fill
+
+    for col in ws2.columns:
+        max_len = max((len(str(c.value)) if c.value is not None else 0) for c in col)
+        ws2.column_dimensions[col[0].column_letter].width = min(max_len + 4, 40)
+
     buf = io.BytesIO()
     wb.save(buf)
     buf.seek(0)

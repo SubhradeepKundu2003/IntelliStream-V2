@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { toast } from 'react-toastify';
 import { AlertCircle, ArrowLeft, ArrowLeftRight, Clock, Loader2, Users } from 'lucide-react';
 import { allocationApi, smeRequestsApi, syncApi } from '../services/api';
 import type { SMEAssociateRequest, SMERequestStatus, SwapRecord, SwapSuggestion } from '../types/allocation';
@@ -147,6 +148,7 @@ function ReviewPanel({
         review_notes: notes.trim() || undefined,
         swaps,
       });
+      toast.success(approved.size === 0 ? 'Request rejected' : `${approved.size} associate${approved.size !== 1 ? 's' : ''} approved`);
       onDone();
     } catch (e: unknown) {
       const detail = (e as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -520,8 +522,11 @@ export default function SMERequestsPage() {
     if (!selectedBatch) return;
     try {
       await smeRequestsApi.cancel(selectedBatch, requestId);
+      toast.success('Request cancelled');
       await loadRequests(selectedBatch);
-    } catch {}
+    } catch {
+      toast.error('Failed to cancel request');
+    }
   };
 
   if (reviewRequest) {

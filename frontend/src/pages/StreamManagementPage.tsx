@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { toast } from 'react-toastify';
 import { ChevronDown, ChevronUp, CheckCircle, Clock, GitBranch, Lock, Pencil, Percent, PieChart, Plus, Sliders, Sparkles, Trash2, UserCircle, Users, XCircle } from 'lucide-react';
 import { aiSuggestionsApi, allocationApi, authApi, streamsApi, syncApi } from '../services/api';
 import type { SyncedBatch } from '../types/sync';
@@ -127,9 +128,11 @@ function SetWeightsModal({
       }));
       if (isSme) {
         await streamsApi.submitProposal(stream.batch_name, stream.id, { weights });
+        toast.success('Proposal submitted for approval');
         onProposalSubmitted?.();
       } else {
         const { data } = await streamsApi.setWeights(stream.batch_name, stream.id, { weights });
+        toast.success('Weights saved');
         onSaved(data);
       }
       onClose();
@@ -252,6 +255,7 @@ function ReviewProposalModal({
     setActionLoading('approve');
     try {
       await streamsApi.approveProposal(stream.batch_name, stream.id, proposal.id);
+      toast.success('Proposal approved');
       onReviewed(stream.id);
       onClose();
     } catch {
@@ -268,6 +272,7 @@ function ReviewProposalModal({
       await streamsApi.rejectProposal(stream.batch_name, stream.id, proposal.id, {
         rejection_reason: rejectionReason.trim() || undefined,
       });
+      toast.success('Proposal rejected');
       onReviewed(stream.id);
       onClose();
     } catch {
@@ -440,6 +445,7 @@ function ManageSMEsModal({
       const { data } = await streamsApi.assignSme(batchName, stream.id, Number(selectedUserId));
       setSmes((prev) => [...prev, data]);
       setSelectedUserId('');
+      toast.success('SME assigned');
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
       setError(typeof detail === 'string' ? detail : 'Failed to assign SME.');
@@ -455,8 +461,10 @@ function ManageSMEsModal({
     try {
       await streamsApi.removeSme(batchName, stream.id, userId);
       setSmes((prev) => prev.filter((s) => s.user_id !== userId));
+      toast.success('SME removed');
     } catch {
       setError('Failed to remove SME.');
+      toast.error('Failed to remove SME');
     } finally {
       setRemoveLoadingId(null);
     }
@@ -595,6 +603,7 @@ function SetTraineePctModal({
     setLoading(true);
     try {
       const { data } = await streamsApi.setTraineePct(stream.batch_name, stream.id, pct);
+      toast.success('Trainee percentage saved');
       onSaved(data);
       onClose();
     } catch (err: unknown) {
@@ -722,6 +731,7 @@ function AISuggestionsModal({
     try {
       const { data } = await aiSuggestionsApi.accept(batchName, s.id);
       setSuggestions((prev) => prev.map((x) => (x.id === data.id ? data : x)));
+      toast.success(`Stream "${s.name}" created`);
       onStreamAccepted();
     } catch (err: unknown) {
       const detail = (err as { response?: { data?: { detail?: string } } })?.response?.data?.detail;
@@ -996,9 +1006,12 @@ function StreamCard({
           {isPending && canManage ? (
             <button
               onClick={() => onReviewProposal(stream)}
+              disabled={isBatchFrozen}
+              title={isBatchFrozen ? 'Batch is frozen — unfreeze in Allocation page first' : undefined}
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium
                 text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-900/20
-                hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors cursor-pointer"
+                hover:bg-amber-100 dark:hover:bg-amber-900/40 transition-colors cursor-pointer
+                disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-amber-50 dark:disabled:hover:bg-amber-900/20"
             >
               <Clock size={13} />
               Review
@@ -1012,8 +1025,11 @@ function StreamCard({
           ) : canEditWeights ? (
             <button
               onClick={() => onSetWeights(stream)}
+              disabled={isBatchFrozen}
+              title={isBatchFrozen ? 'Batch is frozen — unfreeze in Allocation page first' : undefined}
               className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-medium
-                text-tcs-blue hover:bg-tcs-blue/10 dark:hover:bg-tcs-blue/20 transition-colors cursor-pointer"
+                text-tcs-blue hover:bg-tcs-blue/10 dark:hover:bg-tcs-blue/20 transition-colors cursor-pointer
+                disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent"
             >
               <Sliders size={13} />
               Weights
@@ -1041,15 +1057,21 @@ function StreamCard({
               </button>
               <button
                 onClick={() => onRename(stream)}
+                disabled={isBatchFrozen}
+                title={isBatchFrozen ? 'Batch is frozen — unfreeze in Allocation page first' : 'Rename stream'}
                 className="p-1.5 rounded-lg text-tcs-gray-400 hover:text-tcs-gray-700 hover:bg-tcs-gray-100
-                  dark:hover:text-tcs-gray-200 dark:hover:bg-tcs-gray-700 transition-colors cursor-pointer"
+                  dark:hover:text-tcs-gray-200 dark:hover:bg-tcs-gray-700 transition-colors cursor-pointer
+                  disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-tcs-gray-400"
               >
                 <Pencil size={13} />
               </button>
               <button
                 onClick={() => onDelete(stream)}
+                disabled={isBatchFrozen}
+                title={isBatchFrozen ? 'Batch is frozen — unfreeze in Allocation page first' : 'Delete stream'}
                 className="p-1.5 rounded-lg text-tcs-gray-400 hover:text-red-600 hover:bg-red-50
-                  dark:hover:text-red-400 dark:hover:bg-red-900/20 transition-colors cursor-pointer"
+                  dark:hover:text-red-400 dark:hover:bg-red-900/20 transition-colors cursor-pointer
+                  disabled:opacity-40 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-tcs-gray-400"
               >
                 <Trash2 size={13} />
               </button>
@@ -1058,13 +1080,13 @@ function StreamCard({
               <div className="ml-1 flex flex-col overflow-hidden rounded-lg border border-tcs-gray-200 dark:border-tcs-gray-700 shrink-0">
                 <button
                   onClick={() => onMoveUp(stream)}
-                  disabled={isFirst || movingPriorityId !== null}
+                  disabled={isFirst || movingPriorityId !== null || isBatchFrozen}
                   className="flex items-center justify-center px-2 py-1
                     text-tcs-gray-400 hover:text-tcs-blue hover:bg-tcs-blue/10 dark:hover:bg-tcs-blue/20
                     border-b border-tcs-gray-200 dark:border-tcs-gray-700
                     transition-colors cursor-pointer
                     disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-tcs-gray-400"
-                  title="Increase priority (move up)"
+                  title={isBatchFrozen ? 'Batch is frozen' : 'Increase priority (move up)'}
                 >
                   {movingPriorityId === stream.id ? (
                     <span className="w-2.5 h-2.5 border border-current border-t-transparent rounded-full animate-spin" />
@@ -1074,12 +1096,12 @@ function StreamCard({
                 </button>
                 <button
                   onClick={() => onMoveDown(stream)}
-                  disabled={isLast || movingPriorityId !== null}
+                  disabled={isLast || movingPriorityId !== null || isBatchFrozen}
                   className="flex items-center justify-center px-2 py-1
                     text-tcs-gray-400 hover:text-tcs-blue hover:bg-tcs-blue/10 dark:hover:bg-tcs-blue/20
                     transition-colors cursor-pointer
                     disabled:opacity-30 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-tcs-gray-400"
-                  title="Decrease priority (move down)"
+                  title={isBatchFrozen ? 'Batch is frozen' : 'Decrease priority (move down)'}
                 >
                   <ChevronDown size={12} />
                 </button>
@@ -1272,6 +1294,7 @@ function SplitCapacityModal({
         resultMap[stream.id] = data;
       }
 
+      toast.success('Capacities saved');
       onSaved(streams.map((s) => resultMap[s.id] ?? s));
       onClose();
     } catch (e: unknown) {
@@ -1517,12 +1540,14 @@ export default function StreamManagementPage() {
     if (!selectedBatch) return;
     const { data } = await streamsApi.create(selectedBatch.batch_name, { name });
     setStreams((prev) => [...prev, data]);
+    toast.success(`Stream "${name}" created`);
   };
 
   const handleRenameStream = async (name: string) => {
     if (!renameTarget || !selectedBatch) return;
     const { data } = await streamsApi.rename(selectedBatch.batch_name, renameTarget.id, { name });
     setStreams((prev) => prev.map((s) => (s.id === data.id ? data : s)));
+    toast.success('Stream renamed');
   };
 
   const handleDeleteStream = async (stream: BatchStream) => {
@@ -1531,6 +1556,9 @@ export default function StreamManagementPage() {
     try {
       await streamsApi.remove(selectedBatch.batch_name, stream.id);
       setStreams((prev) => prev.filter((s) => s.id !== stream.id));
+      toast.success(`Stream "${stream.name}" deleted`);
+    } catch {
+      toast.error('Failed to delete stream');
     } finally {
       setDeletingId(null);
     }
@@ -1560,7 +1588,7 @@ export default function StreamManagementPage() {
       const { data } = await streamsApi.reorder(selectedBatch.batch_name, reordered.map((s) => s.id));
       setStreams(data);
     } catch {
-      // leave state unchanged on error
+      toast.error('Failed to reorder streams');
     } finally {
       setMovingPriorityId(null);
     }
@@ -1723,6 +1751,8 @@ export default function StreamManagementPage() {
                     <Button
                       variant="secondary"
                       onClick={() => setShowAiModal(true)}
+                      disabled={isBatchFrozen}
+                      title={isBatchFrozen ? 'Batch is frozen — unfreeze in Allocation page first' : undefined}
                     >
                       <Sparkles size={15} />
                       AI Suggestions
@@ -1743,12 +1773,28 @@ export default function StreamManagementPage() {
                       <PieChart size={15} className={isBatchFrozen ? 'hidden' : ''} />
                       Split Capacity
                     </Button>
-                    <Button onClick={() => setShowAddModal(true)}>
+                    <Button
+                      onClick={() => setShowAddModal(true)}
+                      disabled={isBatchFrozen}
+                      title={isBatchFrozen ? 'Batch is frozen — unfreeze in Allocation page first' : undefined}
+                    >
                       <Plus size={15} />
                       Add Stream
                     </Button>
                   </div>
                 )}
+              </div>
+            )}
+
+            {isBatchFrozen && (
+              <div className="flex items-center gap-2 px-3 py-2.5 mb-4 rounded-lg
+                bg-amber-50 dark:bg-amber-900/20 border border-amber-200 dark:border-amber-700
+                text-xs text-amber-700 dark:text-amber-400">
+                <Lock size={13} className="shrink-0" />
+                <span>
+                  This batch is <strong>frozen</strong> — allocation is complete and all stream editing is locked.
+                  Only an admin or manager can unfreeze it from the <strong>Allocation</strong> page.
+                </span>
               </div>
             )}
 

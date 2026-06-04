@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
+import { toast } from 'react-toastify';
 import { BookOpen, Download, Plus, Trash2, Upload } from 'lucide-react';
 import { brApi, syncApi } from '../../services/api';
 import type {
@@ -318,9 +319,11 @@ function BRFormModal({ isOpen, onClose, onSaved, batches, editBr }: BRFormModalP
       if (isEdit) {
         const body: BRUpdate = { title: title.trim(), location: locationVal, streams: streamPayload };
         await brApi.update(editBr!.id, body);
+        toast.success('Business requirement updated');
       } else {
         const body: BRCreate = { batch_name: batchName, title: title.trim(), location: locationVal, streams: streamPayload };
         await brApi.create(body);
+        toast.success('Business requirement created');
       }
       onSaved();
       onClose();
@@ -584,8 +587,9 @@ export default function BusinessRequirementsPage() {
     try {
       await brApi.remove(id);
       setBrs((prev) => prev.filter((b) => b.id !== id));
+      toast.success('Business requirement deleted');
     } catch {
-      // silently ignore
+      toast.error('Failed to delete business requirement');
     } finally {
       setDeleting(null);
     }

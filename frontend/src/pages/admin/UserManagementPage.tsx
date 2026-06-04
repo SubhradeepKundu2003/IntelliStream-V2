@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
+import { toast } from 'react-toastify';
 import { Plus, Search, UserX } from 'lucide-react';
 import { authApi } from '../../services/api';
 import type { Role, UserResponse } from '../../types/auth';
@@ -48,6 +49,7 @@ function AddUserModal({
     setLoading(true);
     try {
       await authApi.register(email, password, role);
+      toast.success(`User ${email} created`);
       reset();
       onCreated();
       onClose();
@@ -141,8 +143,9 @@ export default function UserManagementPage() {
     try {
       await authApi.deactivateUser(id);
       setUsers((prev) => prev.map((u) => (u.id === id ? { ...u, is_active: false } : u)));
+      toast.success('User deactivated');
     } catch {
-      // silently ignore – could add a toast here
+      toast.error('Failed to deactivate user');
     } finally {
       setDeactivating(null);
     }
