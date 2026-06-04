@@ -1500,6 +1500,7 @@ export default function StreamManagementPage() {
 
   useEffect(() => {
     if (!selectedBatch) { setAllocConfig(null); return; }
+    setAllocConfig(null);
     allocationApi.getConfig(selectedBatch.batch_name)
       .then(({ data }) => setAllocConfig(data))
       .catch(() => setAllocConfig(null));
