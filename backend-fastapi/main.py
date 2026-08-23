@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
@@ -11,6 +12,7 @@ from config import settings
 from database import Base, SessionLocal, engine
 from models import Role, User
 from notifications.routes import router as notifications_router
+from notifications.ws_manager import connections, set_event_loop
 from sync.routes import router as sync_router
 from streams.routes import router as streams_router
 from stream_templates.routes import router as stream_templates_router
@@ -118,6 +120,7 @@ async def lifespan(app: FastAPI):
     finally:
         db.close()
 
+    set_event_loop(asyncio.get_running_loop())
     yield
 
 
@@ -127,9 +130,6 @@ app = FastAPI(
     description="JWT-based authentication with role-based access control",
     lifespan=lifespan,
 )
-
-connections: dict[str, list[WebSocket]] = {}
-
 
 @app.websocket("/ws/{user_id}")
 async def websocket_endpoint(websocket: WebSocket, user_id: str):

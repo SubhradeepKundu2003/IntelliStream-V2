@@ -14,6 +14,7 @@ import {
   ClipboardCheck,
 } from 'lucide-react';
 import { notificationsApi } from '../services/api';
+import { useAuth } from '../contexts/AuthContext';
 import type { Notification, NotificationType } from '../types/notifications';
 
 function timeAgo(iso: string): string {
@@ -50,7 +51,10 @@ export default function NotificationBell() {
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLDivElement>(null);
+  const wsRef = useRef<WebSocket | null>(null);
+  const reconnectTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const navigate = useNavigate();
+  const { user } = useAuth();
 
   const unread = notifications.filter((n) => !n.is_read).length;
 
@@ -63,12 +67,40 @@ export default function NotificationBell() {
     }
   }, []);
 
-  // initial load + 30-second polling
   useEffect(() => {
+    if (!user) return;
+
+    const wsBase = (import.meta.env.VITE_API_BASE_URL as string).replace(/^http/, 'ws');
+    let unmounted = false;
+
+    function connect() {
+      if (unmounted) return;
+      const ws = new WebSocket(`${wsBase}/ws/${encodeURIComponent(user!.email)}`);
+      wsRef.current = ws;
+
+      ws.onmessage = (event) => {
+        try {
+          const notification: Notification = JSON.parse(event.data);
+          setNotifications((prev) => [notification, ...prev]);
+        } catch { /* ignore malformed messages */ }
+      };
+
+      ws.onclose = () => {
+        if (!unmounted) {
+          reconnectTimer.current = setTimeout(connect, 5000);
+        }
+      };
+    }
+
     load();
-    const timer = setInterval(load, 30_000);
-    return () => clearInterval(timer);
-  }, [load]);
+    connect();
+
+    return () => {
+      unmounted = true;
+      wsRef.current?.close();
+      if (reconnectTimer.current) clearTimeout(reconnectTimer.current);
+    };
+  }, [user, load]);
 
   // close on outside click
   useEffect(() => {
