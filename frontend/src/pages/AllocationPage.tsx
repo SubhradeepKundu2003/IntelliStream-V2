@@ -2,7 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'react-toastify';
 import {
   AlertCircle, ArrowDownUp, ArrowLeftRight, Brain, ChevronDown, ChevronRight, Download, Filter,
-  Info, Loader2, Lock, Play, RefreshCw, Sliders, SortDesc, Unlock, UserCheck, UserX, Users, X,
+  Info, Loader2, Lock, Play, RefreshCw, Sliders, SortDesc, Sparkles, Unlock, UserCheck, UserX, Users, X,
 } from 'lucide-react';
 import { allocationAiApi, allocationApi, smeRequestsApi, streamsApi, syncApi } from '../services/api';
 import type { AllocationAIRecommendation, AllocationConfig, AllocationRunResult, SMEAssociateRequest, SMERequestStatus, SwapCandidate, TraineeAllocation } from '../types/allocation';
@@ -60,11 +60,11 @@ function RunModeModal({
 }: {
   isOpen: boolean;
   onClose: () => void;
-  onConfirm: (mode: 'priority' | 'fit_score') => void;
+  onConfirm: (mode: 'priority' | 'fit_score' | 'optimal') => void;
   loading: boolean;
   isRerun: boolean;
 }) {
-  const [mode, setMode] = useState<'priority' | 'fit_score'>('priority');
+  const [mode, setMode] = useState<'priority' | 'fit_score' | 'optimal'>('priority');
 
   useEffect(() => { if (isOpen) setMode('priority'); }, [isOpen]);
 
@@ -123,6 +123,31 @@ function RunModeModal({
               </div>
               <p className="text-xs text-tcs-gray-500 dark:text-tcs-gray-400 mt-1 leading-relaxed">
                 Each trainee is assigned to the stream where they have the highest composite fit score. Ignores stream capacity limits.
+              </p>
+            </div>
+          </label>
+
+          <label
+            className={`flex items-start gap-3 rounded-xl border-2 p-4 cursor-pointer transition-colors
+              ${mode === 'optimal'
+                ? 'border-emerald-500 bg-emerald-50 dark:bg-emerald-900/10'
+                : 'border-tcs-gray-200 dark:border-tcs-gray-700 hover:border-tcs-gray-300 dark:hover:border-tcs-gray-600'}`}
+          >
+            <input
+              type="radio"
+              name="alloc-mode"
+              value="optimal"
+              checked={mode === 'optimal'}
+              onChange={() => setMode('optimal')}
+              className="mt-0.5 accent-emerald-500"
+            />
+            <div>
+              <div className="flex items-center gap-2">
+                <Sparkles size={15} className="text-emerald-500 shrink-0" />
+                <p className="text-sm font-semibold text-tcs-gray-900 dark:text-tcs-gray-100">Optimal (OR-Tools)</p>
+              </div>
+              <p className="text-xs text-tcs-gray-500 dark:text-tcs-gray-400 mt-1 leading-relaxed">
+                Solves all streams jointly to maximize overall fit while filling each stream to its exact configured capacity, respecting priority order.
               </p>
             </div>
           </label>
@@ -792,7 +817,7 @@ export default function AllocationPage() {
     if (selectedBatch) loadBatchData(selectedBatch);
   }, [selectedBatch, loadBatchData]);
 
-  const handleRun = async (mode: 'priority' | 'fit_score') => {
+  const handleRun = async (mode: 'priority' | 'fit_score' | 'optimal') => {
     if (!selectedBatch) return;
     setShowRunModal(false);
     setLoadingRun(true);
@@ -1138,8 +1163,12 @@ export default function AllocationPage() {
                     </div>
                   )}
                   <div className="flex items-center gap-1.5 text-xs text-tcs-gray-500 dark:text-tcs-gray-400 bg-tcs-gray-100 dark:bg-tcs-gray-700 px-2.5 py-1 rounded-full">
-                    {lastRunResult.mode === 'fit_score' ? <SortDesc size={12} /> : <ArrowDownUp size={12} />}
-                    {lastRunResult.mode === 'fit_score' ? 'Fit Score' : 'Priority'} mode
+                    {lastRunResult.mode === 'fit_score' ? <SortDesc size={12} />
+                      : lastRunResult.mode === 'optimal' ? <Sparkles size={12} />
+                      : <ArrowDownUp size={12} />}
+                    {lastRunResult.mode === 'fit_score' ? 'Fit Score'
+                      : lastRunResult.mode === 'optimal' ? 'Optimal'
+                      : 'Priority'} mode
                   </div>
                 </div>
               )}

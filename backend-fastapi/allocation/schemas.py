@@ -75,13 +75,13 @@ class ManualOverrideRequest(BaseModel):
 
 
 class AllocationRunRequest(BaseModel):
-    mode: str = "priority"  # "priority" or "fit_score"
+    mode: str = "priority"  # "priority", "fit_score", or "optimal"
 
     @field_validator("mode")
     @classmethod
     def valid_mode(cls, v: str) -> str:
-        if v not in ("priority", "fit_score"):
-            raise ValueError("mode must be 'priority' or 'fit_score'")
+        if v not in ("priority", "fit_score", "optimal"):
+            raise ValueError("mode must be 'priority', 'fit_score', or 'optimal'")
         return v
 
 

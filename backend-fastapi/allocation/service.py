@@ -10,6 +10,7 @@ from streams.models import BatchStream, StreamSubjectWeight
 from sync.models import SyncedDpiRecord, SyncedSubjectScore
 
 from .models import AllocationConfig, TraineeAllocation
+from .optimizer import solve_optimal_allocation
 
 logger = logging.getLogger(__name__)
 
@@ -128,6 +129,18 @@ def run_allocation(batch_name: str, triggered_by: str, db: Session, mode: str = 
                 continue
             best_sid = max(data["stream_scores"].keys(), key=lambda sid: data["stream_scores"][sid]["composite"])
             suggestions[tid] = best_sid
+        unallocated_pool = set(trainee_data.keys()) - set(suggestions.keys())
+    elif mode == "optimal":
+        # Global CP-SAT solve: maximize priority-weighted total fit while
+        # filling every stream to its exact target capacity.
+        solved = solve_optimal_allocation(trainee_data, streams)
+        if solved is None:
+            raise ValueError(
+                "Optimal allocation is infeasible for the current stream capacities "
+                "(percentages must apportion to exactly the trainee count). "
+                "Check stream trainee_pct values and try again."
+            )
+        suggestions = solved
         unallocated_pool = set(trainee_data.keys()) - set(suggestions.keys())
     else:
         # Greedy fill by stream priority (default)
