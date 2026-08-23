@@ -219,7 +219,7 @@ function UploadModal({ onClose, onDone, batchNames }: {
           <div>
             <h2 className="text-base font-semibold text-tcs-gray-900 dark:text-tcs-gray-100">Upload Employee Scores</h2>
             <p className="text-xs text-tcs-gray-500 dark:text-tcs-gray-400 mt-0.5">
-              Emp Id · Name · Sub Batch · DPI · Stream · Java · Python · WebTech · AIML · Agile · BizSkill
+              Required: Emp Id · Name · Sub Batch · DPI · Stream (optional) — any other column is read as a subject score
             </p>
           </div>
           <button onClick={onClose} className="text-tcs-gray-400 hover:text-tcs-gray-600 dark:hover:text-tcs-gray-200 cursor-pointer">

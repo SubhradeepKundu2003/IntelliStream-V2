@@ -1,5 +1,6 @@
 import io
 import json
+import re
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -16,7 +17,50 @@ from .schemas import RowResult, ScoresUploadResult, StreamReferenceResponse
 
 router = APIRouter(prefix="/scores", tags=["scores-upload"])
 
-_EXCEL_SUBJECTS = ["Java", "Python", "WebTech", "AIML", "Agile", "BizSkill"]
+_DEFAULT_TEMPLATE_SUBJECTS = ["Java", "Python", "WebTech", "AIML", "Agile", "BizSkill"]
+
+# Reserved (non-subject) columns, matched by header name — case/space/punctuation
+# insensitive. Every other column with a header is treated as a subject score,
+# named after its header text, so an Excel with more (or fewer, or reordered)
+# subject columns than the default template is picked up automatically.
+_RESERVED_COLUMNS = {
+    "empid": "emp_id",
+    "name": "name",
+    "subbatch": "sub_batch",
+    "dpi": "dpi",
+    "stream": "stream",
+}
+
+
+def _normalize_header(value) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(value or "").lower())
+
+
+def _read_column_layout(ws) -> tuple[dict[str, int], list[tuple[int, str]]]:
+    """Map the header row to reserved-column indices and (index, subject_name)
+    pairs for every other non-empty header. Raises HTTPException if a
+    required reserved column is missing."""
+    header_row = next(ws.iter_rows(min_row=1, max_row=1, values_only=True), ())
+
+    reserved_idx: dict[str, int] = {}
+    subject_columns: list[tuple[int, str]] = []
+    for idx, header in enumerate(header_row):
+        if header is None or str(header).strip() == "":
+            continue
+        key = _RESERVED_COLUMNS.get(_normalize_header(header))
+        if key:
+            reserved_idx[key] = idx
+        else:
+            subject_columns.append((idx, str(header).strip()))
+
+    missing = [c for c in ("emp_id", "name", "sub_batch", "dpi") if c not in reserved_idx]
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Excel is missing required column(s): {', '.join(missing)}",
+        )
+
+    return reserved_idx, subject_columns
 
 
 # ── Template ──────────────────────────────────────────────────────────
@@ -33,10 +77,7 @@ def download_template(_=Depends(get_current_user)):
     ws = wb.active
     ws.title = "Employee Scores"
 
-    headers = [
-        "Emp Id", "Name", "Sub Batch", "DPI", "Stream",
-        "Java", "Python", "WebTech", "AIML", "Agile", "BizSkill",
-    ]
+    headers = ["Emp Id", "Name", "Sub Batch", "DPI", "Stream", *_DEFAULT_TEMPLATE_SUBJECTS]
     hdr_fill = PatternFill(start_color="1E4D8C", end_color="1E4D8C", fill_type="solid")
     hdr_font = Font(color="FFFFFF", bold=True)
 
@@ -118,6 +159,8 @@ async def upload_excel(
         raise HTTPException(status_code=400, detail="Invalid or corrupt Excel file")
 
     ws = wb.active
+    reserved_idx, subject_columns = _read_column_layout(ws)
+    subject_names = [name for _, name in subject_columns]
     row_results: list[RowResult] = []
     succeeded = 0
     failed = 0
@@ -130,17 +173,11 @@ async def upload_excel(
             def _get(i: int, r=row):
                 return r[i] if len(r) > i else None
 
-            emp_id     = _get(0)
-            name       = _get(1)
-            sub_batch  = _get(2)
-            dpi_val    = _get(3)
-            stream_val = _get(4)
-            java       = _get(5)
-            python_    = _get(6)
-            webtech    = _get(7)
-            aiml       = _get(8)
-            agile      = _get(9)
-            bizskill   = _get(10)
+            emp_id     = _get(reserved_idx["emp_id"])
+            name       = _get(reserved_idx["name"])
+            sub_batch  = _get(reserved_idx["sub_batch"])
+            dpi_val    = _get(reserved_idx["dpi"])
+            stream_val = _get(reserved_idx["stream"]) if "stream" in reserved_idx else None
 
             if not emp_id or not name:
                 row_results.append(RowResult(
@@ -166,10 +203,7 @@ async def upload_excel(
                 failed += 1
                 continue
 
-            subject_pairs = [
-                ("Java", java), ("Python", python_), ("WebTech", webtech),
-                ("AIML", aiml), ("Agile", agile), ("BizSkill", bizskill),
-            ]
+            subject_pairs = [(subj_name, _get(idx)) for idx, subj_name in subject_columns]
             subject_scores: list[tuple[str, float]] = []
             row_error: Optional[str] = None
             for subj_name, subj_val in subject_pairs:
@@ -261,14 +295,14 @@ async def upload_excel(
         db.query(SyncedBatch).filter(SyncedBatch.batch_name == batch_name).first()
     )
     if existing_batch:
-        existing_batch.subjects_json = json.dumps(_EXCEL_SUBJECTS)
+        existing_batch.subjects_json = json.dumps(subject_names)
         if succeeded > existing_batch.trainee_count:
             existing_batch.trainee_count = succeeded
         existing_batch.synced_at = now
     else:
         db.add(SyncedBatch(
             batch_name=batch_name,
-            subjects_json=json.dumps(_EXCEL_SUBJECTS),
+            subjects_json=json.dumps(subject_names),
             trainee_count=succeeded,
             synced_at=now,
         ))
